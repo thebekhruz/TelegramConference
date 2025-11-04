@@ -1,0 +1,27 @@
+{
+  "name": "telegram-conference-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for conference registration with PayMe and Click payment integration",
+  "main": "src/bot.js",
+  "scripts": {
+    "start": "node src/bot.js",
+    "dev": "nodemon src/bot.js"
+  },
+  "keywords": [
+    "telegram",
+    "bot",
+    "conference",
+    "payment",
+    "payme",
+    "click"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "node-telegram-bot-api": "^0.66.0",
+    "dotenv": "^16.4.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.0"
+  }
+}
