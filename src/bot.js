@@ -1,3 +1,7 @@
+// ============================================================================
+// IMPORTS AND CONFIGURATION
+// ============================================================================
+
 require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { getText } = require('./languages');
@@ -5,7 +9,11 @@ const RegistrationDatabase = require('./database');
 const fs = require('fs');
 const path = require('path');
 
-// Initialize bot
+// ============================================================================
+// BOT INITIALIZATION
+// ============================================================================
+
+// Initialize Telegram bot with token from environment variables
 const token = process.env.TELEGRAM_BOT_TOKEN;
 
 if (!token) {
@@ -15,23 +23,39 @@ if (!token) {
 
 const bot = new TelegramBot(token, { polling: true });
 
-// Initialize database
+// ============================================================================
+// DATABASE INITIALIZATION
+// ============================================================================
+
+// Initialize SQLite database for storing registrations
 const DB_PATH = process.env.DATABASE_PATH || './data/registrations.db';
 const db = new RegistrationDatabase(DB_PATH);
 
-// Store user preferences (in production, use a database)
+// ============================================================================
+// USER SESSION MANAGEMENT
+// ============================================================================
+
+// Store user language preferences (in-memory, in production use database)
 const userLanguages = new Map();
+
+// Store user registration sessions (temporary data during registration flow)
 const userSessions = new Map();
 
-// Configuration
-const CONFERENCE_PRICE = parseInt(process.env.CONFERENCE_PRICE) || 200000;
+// ============================================================================
+// APPLICATION CONFIGURATION
+// ============================================================================
+
+const CONFERENCE_PRICE = parseInt(process.env.CONFERENCE_PRICE) || 200000; // Price in UZS
 const CURRENCY = process.env.CURRENCY || 'UZS';
-const PAYME_TOKEN = process.env.PAYME_PROVIDER_TOKEN;
-const CLICK_TOKEN = process.env.CLICK_PROVIDER_TOKEN;
+const PAYME_TOKEN = process.env.PAYME_PROVIDER_TOKEN; // PayMe payment provider token
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
-const EVENT_LOCATION_LAT = 41.255280019377366;
-const EVENT_LOCATION_LON = 69.33020330776047;
+const EVENT_LOCATION_LAT = 41.255280019377366; // Event location latitude
+const EVENT_LOCATION_LON = 69.33020330776047; // Event location longitude
 const WELCOME_PHOTO_PATH = process.env.WELCOME_PHOTO_PATH || './welcome_photo.jpg';
+
+// ============================================================================
+// STARTUP LOGGING
+// ============================================================================
 
 console.log('🤖 Telegram Conference Bot started!');
 console.log(`💰 Conference Price: ${CONFERENCE_PRICE} ${CURRENCY}`);
@@ -40,22 +64,42 @@ if (ADMIN_USER_ID) {
   console.log(`👤 Admin User ID: ${ADMIN_USER_ID}`);
 }
 
-// Helper function to get user language
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+
+/**
+ * Get user's preferred language (always Russian)
+ * @param {number} userId - Telegram user ID
+ * @returns {string} Language code (always 'ru')
+ */
 function getUserLanguage(userId) {
-  return userLanguages.get(userId) || 'en';
+  return 'ru';
 }
 
-// Helper function to set user language
+/**
+ * Set user's preferred language
+ * @param {number} userId - Telegram user ID
+ * @param {string} lang - Language code ('en' or 'ru')
+ */
 function setUserLanguage(userId, lang) {
   userLanguages.set(userId, lang);
 }
 
-// Helper function to check if user is admin
+/**
+ * Check if user is an administrator
+ * @param {number} userId - Telegram user ID
+ * @returns {boolean} True if user is admin
+ */
 function isAdmin(userId) {
   return ADMIN_USER_ID && userId === ADMIN_USER_ID;
 }
 
-// Format date for display
+/**
+ * Format date string for display
+ * @param {string} dateString - ISO date string
+ * @returns {string} Formatted date string
+ */
 function formatDate(dateString) {
   const date = new Date(dateString);
   return date.toLocaleString('en-US', {
@@ -67,37 +111,48 @@ function formatDate(dateString) {
   });
 }
 
-// Format currency amount
+/**
+ * Format currency amount for display
+ * @param {number} amount - Amount in smallest currency unit (tyiyn for UZS)
+ * @param {string} currency - Currency code
+ * @returns {string} Formatted amount string
+ */
 function formatAmount(amount, currency) {
   return `${(amount / 100).toLocaleString()} ${currency}`;
 }
 
-// Create language selection keyboard
-function getLanguageKeyboard() {
-  return {
-    inline_keyboard: [
-      [
-        { text: '🇬🇧 English', callback_data: 'lang_en' },
-        { text: '🇷🇺 Русский', callback_data: 'lang_ru' }
-      ]
-    ]
-  };
-}
+// ============================================================================
+// KEYBOARD CREATION FUNCTIONS
+// ============================================================================
 
-// Create main menu keyboard
+/**
+ * Create main menu keyboard with registration, schedule, conditions, benefits, and location buttons
+ * @param {string} lang - Language code (always 'ru')
+ * @returns {Object} Telegram keyboard object
+ */
 function getMainMenuKeyboard(lang) {
   return {
     keyboard: [
       [{ text: getText(lang, 'register_button') }],
-      [{ text: getText(lang, 'location_button') }],
-      [{ text: getText(lang, 'change_language') }, { text: getText(lang, 'help_button') }]
+      [
+        { text: getText(lang, 'schedule_button') },
+        { text: getText(lang, 'conditions_button') }
+      ],
+      [
+        { text: getText(lang, 'benefits_button') },
+        { text: getText(lang, 'location_button') }
+      ]
     ],
     resize_keyboard: true,
     one_time_keyboard: false
   };
 }
 
-// Create contact request keyboard
+/**
+ * Create contact request keyboard with share contact button
+ * @param {string} lang - Language code
+ * @returns {Object} Telegram keyboard object with contact request
+ */
 function getContactRequestKeyboard(lang) {
   return {
     keyboard: [
@@ -113,7 +168,11 @@ function getContactRequestKeyboard(lang) {
   };
 }
 
-// Create contact confirmation keyboard
+/**
+ * Create contact confirmation keyboard with edit options
+ * @param {string} lang - Language code
+ * @returns {Object} Telegram inline keyboard object
+ */
 function getContactConfirmationKeyboard(lang) {
   return {
     inline_keyboard: [
@@ -131,15 +190,16 @@ function getContactConfirmationKeyboard(lang) {
   };
 }
 
-// Create payment method selection keyboard
+/**
+ * Create payment method keyboard (PayMe only)
+ * @param {string} lang - Language code
+ * @returns {Object} Telegram inline keyboard object
+ */
 function getPaymentMethodKeyboard(lang) {
   return {
     inline_keyboard: [
       [
         { text: getText(lang, 'payme_button'), callback_data: 'pay_payme' }
-      ],
-      [
-        { text: getText(lang, 'click_button'), callback_data: 'pay_click' }
       ],
       [
         { text: getText(lang, 'cancel_button'), callback_data: 'cancel_payment' }
@@ -148,7 +208,15 @@ function getPaymentMethodKeyboard(lang) {
   };
 }
 
-// Create backup of paid registrations
+// ============================================================================
+// BACKUP FUNCTIONALITY
+// ============================================================================
+
+/**
+ * Create backup of all paid registrations to CSV file
+ * Creates both timestamped backup and latest backup file
+ * @returns {string|null} Path to backup file or null if error
+ */
 function createBackup() {
   try {
     const backupDir = path.join(__dirname, '..', 'backups');
@@ -164,7 +232,7 @@ function createBackup() {
     fs.writeFileSync(backupPath, csv, 'utf8');
     console.log(`💾 Backup created: ${backupPath}`);
 
-    // Also create a latest backup file
+    // Also create a latest backup file for easy access
     const latestBackupPath = path.join(backupDir, 'registrations_latest.csv');
     fs.writeFileSync(latestBackupPath, csv, 'utf8');
     console.log(`💾 Latest backup updated: ${latestBackupPath}`);
@@ -176,20 +244,28 @@ function createBackup() {
   }
 }
 
-// Send welcome message with photo and location
+// ============================================================================
+// WELCOME MESSAGE FUNCTIONALITY
+// ============================================================================
+
+/**
+ * Send welcome message with photo and main menu
+ * @param {number} chatId - Telegram chat ID
+ * @param {number} userId - Telegram user ID
+ * @param {string} lang - Current user language (always 'ru')
+ */
 async function sendWelcomeMessage(chatId, userId, lang) {
-  const welcomeText = `Педагогический Форум
+  const welcomeText = `<b>Педагогический Форум</b>
 
-«InspireEd Tashkent»
+<b>«InspireEd Tashkent»</b>
 
-29 ноября 2025
+🗓 <b>29 ноября 2025</b>
 
-Русское отделение Oxbridge International
-School приглашает вас на
-международный педагогический форум
-- площадку для обмена ценным опытом и налаживания горизонтальных связей в профессиональном педагогическом сообществе.
+Русское отделение <b>Oxbridge International School</b> приглашает вас на международный педагогический форум - площадку для обмена ценным опытом и налаживания горизонтальных связей в профессиональном педагогическом сообществе.
 
-${getText(lang, 'welcome')}`;
+👋 <b>Добро пожаловать!</b>
+
+Используйте кнопки ниже для навигации:`;
 
   // Try to send photo if it exists
   const photoPath = path.resolve(WELCOME_PHOTO_PATH);
@@ -198,12 +274,14 @@ ${getText(lang, 'welcome')}`;
     if (fs.existsSync(photoPath)) {
       await bot.sendPhoto(chatId, photoPath, {
         caption: welcomeText,
-        reply_markup: getLanguageKeyboard()
+        reply_markup: getMainMenuKeyboard(lang),
+        parse_mode: 'HTML'
       });
     } else {
       // Send without photo if file doesn't exist
       await bot.sendMessage(chatId, welcomeText, {
-        reply_markup: getLanguageKeyboard()
+        reply_markup: getMainMenuKeyboard(lang),
+        parse_mode: 'HTML'
       });
       console.log(`⚠️ Welcome photo not found at ${photoPath}. Using text-only welcome.`);
     }
@@ -211,12 +289,20 @@ ${getText(lang, 'welcome')}`;
     console.error('Error sending welcome photo:', error);
     // Fallback to text-only message
     await bot.sendMessage(chatId, welcomeText, {
-      reply_markup: getLanguageKeyboard()
+      reply_markup: getMainMenuKeyboard(lang),
+      parse_mode: 'HTML'
     });
   }
 }
 
-// /start command
+// ============================================================================
+// COMMAND HANDLERS - USER COMMANDS
+// ============================================================================
+
+/**
+ * /start command handler
+ * Sends welcome message with event information and language selection
+ */
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -225,24 +311,17 @@ bot.onText(/\/start/, (msg) => {
   sendWelcomeMessage(chatId, userId, lang);
 });
 
-// /language command
-bot.onText(/\/language/, (msg) => {
-  const chatId = msg.chat.id;
-  const userId = msg.from.id;
-  const lang = getUserLanguage(userId);
 
-  bot.sendMessage(chatId, getText(lang, 'select_language'), {
-    reply_markup: getLanguageKeyboard()
-  });
-});
-
-// /register command
+/**
+ * /register command handler
+ * Starts registration flow by requesting contact information
+ */
 bot.onText(/\/register/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const lang = getUserLanguage(userId);
 
-  // Reset user session
+  // Reset user session to start fresh registration
   userSessions.delete(userId);
 
   // Request contact information first
@@ -251,7 +330,10 @@ bot.onText(/\/register/, (msg) => {
   });
 });
 
-// /help command
+/**
+ * /help command handler
+ * Shows help information and available commands
+ */
 bot.onText(/\/help/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -262,47 +344,55 @@ bot.onText(/\/help/, (msg) => {
   });
 });
 
-// Admin Commands
-// /stats command - Show registration statistics (admin only)
+// ============================================================================
+// COMMAND HANDLERS - ADMIN COMMANDS
+// ============================================================================
+
+/**
+ * /stats command handler - Show registration statistics (admin only)
+ * Displays total registrations, revenue, and payment method statistics
+ */
 bot.onText(/\/stats/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   if (!isAdmin(userId)) {
-    bot.sendMessage(chatId, '❌ This command is only available to administrators.');
+    bot.sendMessage(chatId, '❌ Эта команда доступна только администраторам.');
     return;
   }
 
   try {
     const stats = db.getStatistics();
     const statsMessage = `
-📊 <b>Conference Registration Statistics</b>
+📊 <b>Статистика регистраций на конференцию</b>
 
-👥 <b>Registrations:</b>
-- Total: ${stats.total_registrations}
-- PayMe: ${stats.payme_registrations}
-- Click: ${stats.click_registrations}
+👥 <b>Регистрации:</b>
+• <b>Всего:</b> ${stats.total_registrations}
+• <b>PayMe:</b> ${stats.payme_registrations}
 
-💰 <b>Revenue:</b>
-- Total: ${formatAmount(stats.total_revenue, CURRENCY)}
+💰 <b>Выручка:</b>
+• <b>Всего:</b> ${formatAmount(stats.total_revenue, CURRENCY)}
 
-📅 <i>Last updated: ${formatDate(new Date().toISOString())}</i>
+📅 <i>Последнее обновление: ${formatDate(new Date().toISOString())}</i>
 `;
 
     bot.sendMessage(chatId, statsMessage, { parse_mode: 'HTML' });
   } catch (error) {
     console.error('Error fetching statistics:', error);
-    bot.sendMessage(chatId, '❌ Error fetching statistics.');
+    bot.sendMessage(chatId, '❌ Ошибка при получении статистики.');
   }
 });
 
-// /recent command - Show recent registrations (admin only)
+/**
+ * /recent command handler - Show recent registrations (admin only)
+ * @param {number} limit - Optional limit (default: 10, max: 50)
+ */
 bot.onText(/\/recent(?:\s+(\d+))?/, (msg, match) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   if (!isAdmin(userId)) {
-    bot.sendMessage(chatId, '❌ This command is only available to administrators.');
+    bot.sendMessage(chatId, '❌ Эта команда доступна только администраторам.');
     return;
   }
 
@@ -312,17 +402,17 @@ bot.onText(/\/recent(?:\s+(\d+))?/, (msg, match) => {
     const registrations = db.getRecentRegistrations(Math.min(limit, 50));
 
     if (registrations.length === 0) {
-      bot.sendMessage(chatId, 'No registrations found.');
+      bot.sendMessage(chatId, 'Регистрации не найдены.');
       return;
     }
 
-    let message = `📋 <b>Recent ${registrations.length} Registration(s):</b>\n\n`;
+    let message = `📋 <b>Последние ${registrations.length} регистраций:</b>\n\n`;
 
     registrations.forEach((reg, index) => {
       message += `<b>${index + 1}. #${reg.id}</b>\n`;
       message += `👤 ${reg.first_name || 'N/A'}${reg.last_name ? ' ' + reg.last_name : ''}\n`;
-      message += `📱 ${reg.username ? '@' + reg.username : 'No username'}\n`;
-      message += `📞 ${reg.phone_number || 'No phone'}\n`;
+      message += `📱 ${reg.username ? '@' + reg.username : 'Нет username'}\n`;
+      message += `📞 ${reg.phone_number || 'Нет телефона'}\n`;
       message += `💳 ${reg.payment_method.toUpperCase()}\n`;
       message += `💰 ${formatAmount(reg.amount, reg.currency)}\n`;
       message += `📅 ${formatDate(reg.registration_date)}\n\n`;
@@ -331,17 +421,20 @@ bot.onText(/\/recent(?:\s+(\d+))?/, (msg, match) => {
     bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
   } catch (error) {
     console.error('Error fetching recent registrations:', error);
-    bot.sendMessage(chatId, '❌ Error fetching registrations.');
+    bot.sendMessage(chatId, '❌ Ошибка при получении регистраций.');
   }
 });
 
-// /export command - Export registrations to CSV (admin only)
+/**
+ * /export command handler - Export registrations to CSV (admin only)
+ * Generates CSV file with all registration data and sends it to admin
+ */
 bot.onText(/\/export/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   if (!isAdmin(userId)) {
-    bot.sendMessage(chatId, '❌ This command is only available to administrators.');
+    bot.sendMessage(chatId, '❌ Эта команда доступна только администраторам.');
     return;
   }
 
@@ -350,42 +443,52 @@ bot.onText(/\/export/, (msg) => {
     const fileName = `conference_registrations_${Date.now()}.csv`;
 
     bot.sendDocument(chatId, Buffer.from(csv, 'utf8'), {
-      caption: '📊 Conference Registrations Export',
-    }, {
       filename: fileName,
       contentType: 'text/csv',
+      caption: '📊 Экспорт регистраций на конференцию',
     });
   } catch (error) {
     console.error('Error exporting registrations:', error);
-    bot.sendMessage(chatId, '❌ Error exporting registrations.');
+    bot.sendMessage(chatId, '❌ Ошибка при экспорте регистраций.');
   }
 });
 
-// /adminhelp command - Show admin commands (admin only)
+/**
+ * /adminhelp command handler - Show admin commands (admin only)
+ * Displays list of available admin commands
+ */
 bot.onText(/\/adminhelp/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
 
   if (!isAdmin(userId)) {
-    bot.sendMessage(chatId, '❌ This command is only available to administrators.');
+    bot.sendMessage(chatId, '❌ Эта команда доступна только администраторам.');
     return;
   }
 
   const helpMessage = `
-👨‍💼 <b>Admin Commands</b>
+👨‍💼 <b>Команды администратора</b>
 
-📊 /stats - View registration statistics
-📋 /recent [number] - Show recent registrations (default: 10, max: 50)
-📥 /export - Export all registrations to CSV
-👨‍💼 /adminhelp - Show this help message
+📊 /stats - Просмотр статистики регистраций
+📋 /recent [число] - Показать последние регистрации (по умолчанию: 10, максимум: 50)
+📥 /export - Экспорт всех регистраций в CSV
+👨‍💼 /adminhelp - Показать это сообщение
 
-<i>Only administrators can use these commands.</i>
+<i>Только администраторы могут использовать эти команды.</i>
 `;
 
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'HTML' });
 });
 
-// Helper function to safely answer callback queries
+// ============================================================================
+// CALLBACK QUERY HANDLING
+// ============================================================================
+
+/**
+ * Safely answer callback queries, handling expired/invalid queries gracefully
+ * @param {string} queryId - Callback query ID
+ * @param {Object} options - Optional parameters for answerCallbackQuery
+ */
 async function answerCallbackQuery(queryId, options = {}) {
   try {
     await bot.answerCallbackQuery(queryId, options);
@@ -406,36 +509,19 @@ async function answerCallbackQuery(queryId, options = {}) {
   }
 }
 
-// Handle callback queries
+/**
+ * Callback query event handler
+ * Handles all inline button callbacks: language selection, payment, contact confirmation, etc.
+ */
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const userId = query.from.id;
   const data = query.data;
   const messageId = query.message.message_id;
 
-  // Language selection
-  if (data.startsWith('lang_')) {
-    const selectedLang = data.replace('lang_', '');
-    setUserLanguage(userId, selectedLang);
-
-    await answerCallbackQuery(query.id);
-    try {
-      await bot.editMessageText(getText(selectedLang, 'language_changed'), {
-        chat_id: chatId,
-        message_id: messageId
-      });
-    } catch (error) {
-      console.error('Error editing message:', error.message);
-    }
-
-    setTimeout(() => {
-      bot.sendMessage(chatId, getText(selectedLang, 'main_menu'), {
-        reply_markup: getMainMenuKeyboard(selectedLang)
-      });
-    }, 1000);
-  }
-
-  // Payment method selection
+  // --------------------------------------------------------------------------
+  // Payment Method Selection Handler (PayMe only)
+  // --------------------------------------------------------------------------
   if (data.startsWith('pay_')) {
     const lang = getUserLanguage(userId);
     const paymentMethod = data.replace('pay_', '');
@@ -451,37 +537,31 @@ bot.on('callback_query', async (query) => {
       return;
     }
 
-    let providerToken;
-    let providerName;
-
+    // Only PayMe is supported
     if (paymentMethod === 'payme') {
-      providerToken = PAYME_TOKEN;
-      providerName = 'PayMe';
-    } else if (paymentMethod === 'click') {
-      providerToken = CLICK_TOKEN;
-      providerName = 'Click';
-    }
+      if (!PAYME_TOKEN) {
+        bot.sendMessage(chatId, '❌ PayMe provider token is not configured. Please contact the administrator.');
+        return;
+      }
 
-    if (!providerToken) {
-      bot.sendMessage(chatId, `❌ ${providerName} provider token is not configured. Please contact the administrator.`);
-      return;
-    }
+      // Store payment method in session
+      session.paymentMethod = 'payme';
+      session.providerName = 'PayMe';
+      userSessions.set(userId, session);
 
-    // Store payment method in session (preserving existing session data like phone_number)
-    session.paymentMethod = paymentMethod;
-    session.providerName = providerName;
-    userSessions.set(userId, session);
-
-    // Send invoice
-    try {
-      await sendInvoice(chatId, userId, lang, providerToken, providerName);
-    } catch (error) {
-      console.error('Error sending invoice:', error);
-      bot.sendMessage(chatId, getText(lang, 'error_occurred'));
+      // Send invoice
+      try {
+        await sendInvoice(chatId, userId, lang, PAYME_TOKEN, 'PayMe');
+      } catch (error) {
+        console.error('Error sending invoice:', error);
+        bot.sendMessage(chatId, getText(lang, 'error_occurred'));
+      }
     }
   }
 
-  // Cancel payment
+  // --------------------------------------------------------------------------
+  // Payment Cancellation Handler
+  // --------------------------------------------------------------------------
   if (data === 'cancel_payment') {
     const lang = getUserLanguage(userId);
     await answerCallbackQuery(query.id);
@@ -495,7 +575,9 @@ bot.on('callback_query', async (query) => {
     }
   }
 
-  // Contact confirmation flow
+  // --------------------------------------------------------------------------
+  // Contact Confirmation Handler
+  // --------------------------------------------------------------------------
   if (data === 'confirm_contact') {
     const lang = getUserLanguage(userId);
     const session = userSessions.get(userId) || {};
@@ -526,12 +608,15 @@ bot.on('callback_query', async (query) => {
     // Show payment method selection
     setTimeout(() => {
       bot.sendMessage(chatId, getText(lang, 'registration_info'), {
-        reply_markup: getPaymentMethodKeyboard(lang)
+        reply_markup: getPaymentMethodKeyboard(lang),
+        parse_mode: 'HTML'
       });
     }, 500);
   }
 
-  // Edit name
+  // --------------------------------------------------------------------------
+  // Contact Edit Name Handler
+  // --------------------------------------------------------------------------
   if (data === 'edit_name') {
     const lang = getUserLanguage(userId);
     const session = userSessions.get(userId) || {};
@@ -547,7 +632,9 @@ bot.on('callback_query', async (query) => {
     }
   }
 
-  // Edit phone
+  // --------------------------------------------------------------------------
+  // Contact Edit Phone Handler
+  // --------------------------------------------------------------------------
   if (data === 'edit_phone') {
     const lang = getUserLanguage(userId);
     const session = userSessions.get(userId) || {};
@@ -563,7 +650,9 @@ bot.on('callback_query', async (query) => {
     }
   }
 
-  // Cancel contact
+  // --------------------------------------------------------------------------
+  // Contact Cancellation Handler
+  // --------------------------------------------------------------------------
   if (data === 'cancel_contact') {
     const lang = getUserLanguage(userId);
     await answerCallbackQuery(query.id);
@@ -579,7 +668,18 @@ bot.on('callback_query', async (query) => {
   }
 });
 
-// Send invoice function
+// ============================================================================
+// PAYMENT PROCESSING
+// ============================================================================
+
+/**
+ * Send payment invoice to user via Telegram Payments
+ * @param {number} chatId - Telegram chat ID
+ * @param {number} userId - Telegram user ID
+ * @param {string} lang - User language
+ * @param {string} providerToken - PayMe provider token
+ * @param {string} providerName - Payment provider name (PayMe)
+ */
 async function sendInvoice(chatId, userId, lang, providerToken, providerName) {
   const title = getText(lang, 'invoice_title');
   const description = getText(lang, 'payment_description');
@@ -616,14 +716,21 @@ async function sendInvoice(chatId, userId, lang, providerToken, providerName) {
   );
 }
 
-// Handle pre-checkout query
+/**
+ * Pre-checkout query handler
+ * Approves payment requests before user confirms payment
+ * In production, you might want to verify stock/availability here
+ */
 bot.on('pre_checkout_query', async (query) => {
   // Always approve pre-checkout
-  // In production, you might want to verify stock/availability here
   await bot.answerPreCheckoutQuery(query.id, true);
 });
 
-// Handle successful payment
+/**
+ * Successful payment handler
+ * Processes completed payments, saves registration to database, creates backup,
+ * sends confirmation to user, and notifies admin
+ */
 bot.on('successful_payment', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
@@ -678,19 +785,19 @@ bot.on('successful_payment', async (msg) => {
     createBackup();
 
     // Enhanced success message to user
-    const userName = user.first_name || 'Participant';
+    const userName = user.first_name || 'Участник';
     const confirmationMessage = `
 ✅ ${getText(lang, 'payment_success', { transaction_id: transactionId })}
 
-📋 Registration Details:
-👤 Name: ${userName}${user.last_name ? ' ' + user.last_name : ''}
-📞 Phone: ${session.phone_number || 'N/A'}
-💳 Payment Method: ${session.providerName || 'N/A'}
-💰 Amount: ${formatAmount(payment.total_amount, payment.currency)}
-🆔 Registration ID: #${registrationId}
-📅 Date: ${formatDate(new Date().toISOString())}
+📋 <b>Детали регистрации:</b>
+👤 <b>Имя:</b> ${userName}${user.last_name ? ' ' + user.last_name : ''}
+📞 <b>Телефон:</b> ${session.phone_number || 'N/A'}
+💳 <b>Способ оплаты:</b> ${session.providerName || 'N/A'}
+💰 <b>Сумма:</b> ${formatAmount(payment.total_amount, payment.currency)}
+🆔 <b>ID регистрации:</b> #${registrationId}
+📅 <b>Дата:</b> ${formatDate(new Date().toISOString())}
 
-We look forward to seeing you at the conference! 🎉
+Ждем вас на конференции! 🎉
 `;
 
     await bot.sendMessage(chatId, confirmationMessage, {
@@ -703,26 +810,26 @@ We look forward to seeing you at the conference! 🎉
       try {
         const stats = db.getStatistics();
         const adminMessage = `
-🔔 <b>New Conference Registration!</b>
+🔔 <b>Новая регистрация на конференцию!</b>
 
-👤 <b>User Info:</b>
-- Name: ${user.first_name || 'N/A'}${user.last_name ? ' ' + user.last_name : ''}
-- Username: ${user.username ? '@' + user.username : 'N/A'}
-- Phone: ${session.phone_number || 'N/A'}
-- User ID: <code>${userId}</code>
-- Language: ${lang.toUpperCase()}
+👤 <b>Информация о пользователе:</b>
+• <b>Имя:</b> ${user.first_name || 'N/A'}${user.last_name ? ' ' + user.last_name : ''}
+• <b>Username:</b> ${user.username ? '@' + user.username : 'N/A'}
+• <b>Телефон:</b> ${session.phone_number || 'N/A'}
+• <b>User ID:</b> <code>${userId}</code>
+• <b>Язык:</b> ${lang.toUpperCase()}
 
-💰 <b>Payment Info:</b>
-- Method: ${session.providerName || 'Unknown'}
-- Amount: ${formatAmount(payment.total_amount, payment.currency)}
-- Transaction ID: <code>${transactionId}</code>
+💰 <b>Информация об оплате:</b>
+• <b>Способ:</b> ${session.providerName || 'Неизвестно'}
+• <b>Сумма:</b> ${formatAmount(payment.total_amount, payment.currency)}
+• <b>ID транзакции:</b> <code>${transactionId}</code>
 
-📊 <b>Current Statistics:</b>
-- Total Registrations: ${stats.total_registrations}
-- Total Revenue: ${formatAmount(stats.total_revenue, payment.currency)}
-- PayMe: ${stats.payme_registrations} | Click: ${stats.click_registrations}
+📊 <b>Текущая статистика:</b>
+• <b>Всего регистраций:</b> ${stats.total_registrations}
+• <b>Общая выручка:</b> ${formatAmount(stats.total_revenue, payment.currency)}
+• <b>PayMe:</b> ${stats.payme_registrations}
 
-🆔 Registration ID: #${registrationId}
+🆔 <b>ID регистрации:</b> #${registrationId}
 📅 ${formatDate(new Date().toISOString())}
 `;
 
@@ -743,7 +850,8 @@ We look forward to seeing you at the conference! 🎉
     console.error('❌ Error saving registration:', error);
     bot.sendMessage(
       chatId,
-      '⚠️ Payment received but there was an error saving your registration. Please contact support with your transaction ID: ' + transactionId
+      `⚠️ <b>Оплата получена, но возникла ошибка при сохранении регистрации.</b>\n\nПожалуйста, свяжитесь с поддержкой и укажите ID транзакции: <code>${transactionId}</code>`,
+      { parse_mode: 'HTML' }
     );
 
     // Still notify admin about the error
@@ -751,7 +859,7 @@ We look forward to seeing you at the conference! 🎉
       try {
         await bot.sendMessage(
           ADMIN_USER_ID,
-          `⚠️ <b>Registration Error!</b>\n\nUser ${userId} paid successfully but registration failed to save.\nTransaction: <code>${transactionId}</code>\nError: ${error.message}`,
+          `⚠️ <b>Ошибка регистрации!</b>\n\nПользователь ${userId} успешно оплатил, но регистрация не была сохранена.\nТранзакция: <code>${transactionId}</code>\nОшибка: ${error.message}`,
           { parse_mode: 'HTML' }
         );
       } catch (e) {
@@ -761,13 +869,22 @@ We look forward to seeing you at the conference! 🎉
   }
 });
 
-// Handle contact sharing
+// ============================================================================
+// MESSAGE HANDLERS
+// ============================================================================
+
+/**
+ * Message event handler
+ * Handles contact sharing, text messages, keyboard button presses, and location requests
+ */
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const lang = getUserLanguage(userId);
 
-  // Handle contact sharing
+  // --------------------------------------------------------------------------
+  // Contact Sharing Handler
+  // --------------------------------------------------------------------------
   if (msg.contact) {
     const contact = msg.contact;
     const phoneNumber = contact.phone_number;
@@ -803,21 +920,24 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Handle text messages (for keyboard buttons)
+  // --------------------------------------------------------------------------
+  // Text Message Handler (Keyboard Buttons and Text Input)
+  // --------------------------------------------------------------------------
   if (msg.text && !msg.text.startsWith('/')) {
     const text = msg.text;
 
-    // Register button
+    // Register button handler (Book a ticket)
     if (text === getText(lang, 'register_button')) {
       // Reset user session
       userSessions.delete(userId);
       // Request contact information first
       bot.sendMessage(chatId, getText(lang, 'contact_request'), {
-        reply_markup: getContactRequestKeyboard(lang)
+        reply_markup: getContactRequestKeyboard(lang),
+        parse_mode: 'HTML'
       });
     }
 
-    // Cancel button during contact request
+    // Cancel button handler (during contact request)
     if (text === getText(lang, 'cancel_button')) {
       const session = userSessions.get(userId);
       // If no contact info is stored, user is cancelling contact request
@@ -830,7 +950,34 @@ bot.on('message', async (msg) => {
       }
     }
 
-    // Location button
+    // Schedule button handler
+    if (text === getText(lang, 'schedule_button')) {
+      bot.sendMessage(chatId, getText(lang, 'schedule_info'), {
+        reply_markup: getMainMenuKeyboard(lang),
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+
+    // Conditions button handler
+    if (text === getText(lang, 'conditions_button')) {
+      bot.sendMessage(chatId, getText(lang, 'conditions_info'), {
+        reply_markup: getMainMenuKeyboard(lang),
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+
+    // Benefits button handler
+    if (text === getText(lang, 'benefits_button')) {
+      bot.sendMessage(chatId, getText(lang, 'benefits_info'), {
+        reply_markup: getMainMenuKeyboard(lang),
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+
+    // Location button handler - sends event location
     if (text === getText(lang, 'location_button')) {
       bot.sendLocation(chatId, EVENT_LOCATION_LAT, EVENT_LOCATION_LON, {
         reply_markup: getMainMenuKeyboard(lang)
@@ -838,25 +985,11 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // Change language button
-    if (text === getText(lang, 'change_language')) {
-      bot.sendMessage(chatId, getText(lang, 'select_language'), {
-        reply_markup: getLanguageKeyboard()
-      });
-    }
-
-    // Help button
-    if (text === getText(lang, 'help_button')) {
-      bot.sendMessage(chatId, getText(lang, 'help_text'), {
-        reply_markup: getMainMenuKeyboard(lang)
-      });
-    }
-
-    // Handle text input for editing contact info
+    // Text input handler for editing contact information
     if (text && !text.startsWith('/')) {
       const session = userSessions.get(userId);
       
-      // Check if user is editing contact info
+      // Check if user is in edit mode for contact information
       if (session && session.editing) {
         if (session.editing === 'name') {
           session.contact_name = text;
@@ -906,9 +1039,10 @@ bot.on('message', async (msg) => {
         // Check if this is not one of the recognized buttons
         const recognizedButtons = [
           getText(lang, 'register_button'),
+          getText(lang, 'schedule_button'),
+          getText(lang, 'conditions_button'),
+          getText(lang, 'benefits_button'),
           getText(lang, 'location_button'),
-          getText(lang, 'change_language'),
-          getText(lang, 'help_button'),
           getText(lang, 'cancel_button')
         ];
         
@@ -922,25 +1056,45 @@ bot.on('message', async (msg) => {
   }
 });
 
-// Error handling
+// ============================================================================
+// ERROR HANDLING
+// ============================================================================
+
+/**
+ * Polling error handler
+ * Catches errors from Telegram API polling
+ */
 bot.on('polling_error', (error) => {
   console.error('Polling error:', error);
 });
 
-// Catch unhandled promise rejections
+/**
+ * Unhandled promise rejection handler
+ * Prevents bot from crashing on unhandled promise rejections
+ */
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
   // Don't exit, just log the error
 });
 
-// Catch uncaught exceptions
+/**
+ * Uncaught exception handler
+ * Catches unexpected errors to prevent bot crashes
+ */
 process.on('uncaughtException', (error) => {
   console.error('Uncaught Exception:', error);
   // For critical errors, we might want to exit, but for now just log
   // In production, you might want to restart the bot here
 });
 
-// Graceful shutdown
+// ============================================================================
+// GRACEFUL SHUTDOWN
+// ============================================================================
+
+/**
+ * SIGINT handler (Ctrl+C)
+ * Gracefully shuts down bot, closes database, and stops polling
+ */
 process.on('SIGINT', () => {
   console.log('\n🛑 Shutting down bot...');
   db.close();
@@ -948,6 +1102,10 @@ process.on('SIGINT', () => {
   process.exit(0);
 });
 
+/**
+ * SIGTERM handler
+ * Gracefully shuts down bot, closes database, and stops polling
+ */
 process.on('SIGTERM', () => {
   console.log('\n🛑 Shutting down bot...');
   db.close();
