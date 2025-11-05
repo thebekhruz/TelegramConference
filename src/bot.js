@@ -91,6 +91,22 @@ function getMainMenuKeyboard(lang) {
   };
 }
 
+// Create contact request keyboard
+function getContactRequestKeyboard(lang) {
+  return {
+    keyboard: [
+      [
+        { text: getText(lang, 'contact_button'), request_contact: true }
+      ],
+      [
+        { text: getText(lang, 'cancel_button') }
+      ]
+    ],
+    resize_keyboard: true,
+    one_time_keyboard: true
+  };
+}
+
 // Create payment method selection keyboard
 function getPaymentMethodKeyboard(lang) {
   return {
@@ -136,8 +152,12 @@ bot.onText(/\/register/, (msg) => {
   const userId = msg.from.id;
   const lang = getUserLanguage(userId);
 
-  bot.sendMessage(chatId, getText(lang, 'registration_info'), {
-    reply_markup: getPaymentMethodKeyboard(lang)
+  // Reset user session
+  userSessions.delete(userId);
+
+  // Request contact information first
+  bot.sendMessage(chatId, getText(lang, 'contact_request'), {
+    reply_markup: getContactRequestKeyboard(lang)
   });
 });
 
@@ -212,6 +232,7 @@ bot.onText(/\/recent(?:\s+(\d+))?/, (msg, match) => {
       message += `<b>${index + 1}. #${reg.id}</b>\n`;
       message += `👤 ${reg.first_name || 'N/A'}${reg.last_name ? ' ' + reg.last_name : ''}\n`;
       message += `📱 ${reg.username ? '@' + reg.username : 'No username'}\n`;
+      message += `📞 ${reg.phone_number || 'No phone'}\n`;
       message += `💳 ${reg.payment_method.toUpperCase()}\n`;
       message += `💰 ${formatAmount(reg.amount, reg.currency)}\n`;
       message += `📅 ${formatDate(reg.registration_date)}\n\n`;
@@ -306,6 +327,15 @@ bot.on('callback_query', async (query) => {
 
     await bot.answerCallbackQuery(query.id);
 
+    // Check if contact information was shared
+    const session = userSessions.get(userId) || {};
+    if (!session.phone_number) {
+      bot.sendMessage(chatId, getText(lang, 'contact_error'), {
+        reply_markup: getContactRequestKeyboard(lang)
+      });
+      return;
+    }
+
     let providerToken;
     let providerName;
 
@@ -322,11 +352,10 @@ bot.on('callback_query', async (query) => {
       return;
     }
 
-    // Store payment method in session
-    userSessions.set(userId, {
-      paymentMethod: paymentMethod,
-      providerName: providerName
-    });
+    // Store payment method in session (preserving existing session data like phone_number)
+    session.paymentMethod = paymentMethod;
+    session.providerName = providerName;
+    userSessions.set(userId, session);
 
     // Send invoice
     try {
@@ -420,6 +449,7 @@ bot.on('successful_payment', async (msg) => {
       username: user.username || null,
       first_name: user.first_name || null,
       last_name: user.last_name || null,
+      phone_number: session.phone_number || null,
       language_code: user.language_code || lang,
       payment_method: session.paymentMethod || 'unknown',
       transaction_id: transactionId,
@@ -438,6 +468,7 @@ bot.on('successful_payment', async (msg) => {
 
 📋 Registration Details:
 👤 Name: ${userName}${user.last_name ? ' ' + user.last_name : ''}
+📞 Phone: ${session.phone_number || 'N/A'}
 💳 Payment Method: ${session.providerName || 'N/A'}
 💰 Amount: ${formatAmount(payment.total_amount, payment.currency)}
 🆔 Registration ID: #${registrationId}
@@ -461,6 +492,7 @@ We look forward to seeing you at the conference! 🎉
 👤 <b>User Info:</b>
 - Name: ${user.first_name || 'N/A'}${user.last_name ? ' ' + user.last_name : ''}
 - Username: ${user.username ? '@' + user.username : 'N/A'}
+- Phone: ${session.phone_number || 'N/A'}
 - User ID: <code>${userId}</code>
 - Language: ${lang.toUpperCase()}
 
@@ -513,19 +545,70 @@ We look forward to seeing you at the conference! 🎉
   }
 });
 
-// Handle text messages (for keyboard buttons)
+// Handle contact sharing
 bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const userId = msg.from.id;
+  const lang = getUserLanguage(userId);
+
+  // Handle contact sharing
+  if (msg.contact) {
+    const contact = msg.contact;
+    const phoneNumber = contact.phone_number;
+    const contactName = contact.first_name || (contact.first_name && contact.last_name ? 
+      `${contact.first_name} ${contact.last_name}` : contact.first_name) || 'User';
+
+    // Store contact info in session
+    if (!userSessions.has(userId)) {
+      userSessions.set(userId, {});
+    }
+    const session = userSessions.get(userId);
+    session.phone_number = phoneNumber;
+    session.contact_name = contactName;
+
+    // Confirm contact received and show payment options
+    await bot.sendMessage(chatId, getText(lang, 'contact_shared', {
+      contact_name: contactName,
+      phone_number: phoneNumber
+    }), {
+      reply_markup: { remove_keyboard: true }
+    });
+
+    // Show payment method selection
+    setTimeout(() => {
+      bot.sendMessage(chatId, getText(lang, 'registration_info'), {
+        reply_markup: getPaymentMethodKeyboard(lang)
+      });
+    }, 500);
+
+    return;
+  }
+
+  // Handle text messages (for keyboard buttons)
   if (msg.text && !msg.text.startsWith('/')) {
-    const chatId = msg.chat.id;
-    const userId = msg.from.id;
-    const lang = getUserLanguage(userId);
     const text = msg.text;
 
     // Register button
     if (text === getText(lang, 'register_button')) {
-      bot.sendMessage(chatId, getText(lang, 'registration_info'), {
-        reply_markup: getPaymentMethodKeyboard(lang)
+      // Reset user session
+      userSessions.delete(userId);
+      // Request contact information first
+      bot.sendMessage(chatId, getText(lang, 'contact_request'), {
+        reply_markup: getContactRequestKeyboard(lang)
       });
+    }
+
+    // Cancel button during contact request
+    if (text === getText(lang, 'cancel_button')) {
+      const session = userSessions.get(userId);
+      // If no contact info is stored, user is cancelling contact request
+      if (!session || !session.phone_number) {
+        bot.sendMessage(chatId, getText(lang, 'payment_cancelled'), {
+          reply_markup: { remove_keyboard: true }
+        });
+        userSessions.delete(userId);
+        return;
+      }
     }
 
     // Change language button
@@ -540,6 +623,26 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, getText(lang, 'help_text'), {
         reply_markup: getMainMenuKeyboard(lang)
       });
+    }
+
+    // If user sends text during contact request, remind them to share contact
+    if (!msg.contact && text && !text.startsWith('/')) {
+      const session = userSessions.get(userId);
+      if (!session || !session.phone_number) {
+        // Check if this is not one of the recognized buttons
+        const recognizedButtons = [
+          getText(lang, 'register_button'),
+          getText(lang, 'change_language'),
+          getText(lang, 'help_button'),
+          getText(lang, 'cancel_button')
+        ];
+        
+        if (!recognizedButtons.includes(text)) {
+          bot.sendMessage(chatId, getText(lang, 'contact_error'), {
+            reply_markup: getContactRequestKeyboard(lang)
+          });
+        }
+      }
     }
   }
 });

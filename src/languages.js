@@ -14,6 +14,16 @@ const languages = {
                       "📅 Join our upcoming conference!\n" +
                       "💰 Price: 200,000 UZS\n\n" +
                       "Please select your payment method:",
+    
+    contact_request: "📱 Contact Information Required\n\n" +
+                     "Before proceeding with payment, please share your contact information (name and phone number) by tapping the button below:",
+    
+    contact_button: "📱 Share My Contact",
+    contact_shared: "✅ Contact information received!\n\n" +
+                    "Name: {contact_name}\n" +
+                    "Phone: {phone_number}\n\n" +
+                    "Now please select your payment method:",
+    contact_error: "❌ Please share your contact information using the button below.",
 
     payme_button: "💳 Pay with PayMe",
     click_button: "💳 Pay with Click",
@@ -61,6 +71,16 @@ const languages = {
                       "📅 Присоединяйтесь к нашей предстоящей конференции!\n" +
                       "💰 Цена: 200 000 сум\n\n" +
                       "Пожалуйста, выберите способ оплаты:",
+    
+    contact_request: "📱 Требуется контактная информация\n\n" +
+                     "Перед оплатой, пожалуйста, поделитесь своей контактной информацией (имя и номер телефона), нажав кнопку ниже:",
+    
+    contact_button: "📱 Поделиться контактом",
+    contact_shared: "✅ Контактная информация получена!\n\n" +
+                    "Имя: {contact_name}\n" +
+                    "Телефон: {phone_number}\n\n" +
+                    "Теперь выберите способ оплаты:",
+    contact_error: "❌ Пожалуйста, поделитесь своей контактной информацией, используя кнопку ниже.",
 
     payme_button: "💳 Оплатить через PayMe",
     click_button: "💳 Оплатить через Click",
