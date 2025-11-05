@@ -23,6 +23,7 @@ class RegistrationDatabase {
         username TEXT,
         first_name TEXT,
         last_name TEXT,
+        phone_number TEXT,
         language_code TEXT,
         payment_method TEXT NOT NULL,
         transaction_id TEXT NOT NULL UNIQUE,
@@ -34,6 +35,13 @@ class RegistrationDatabase {
         status TEXT DEFAULT 'completed'
       )
     `);
+
+    // Add phone_number column if it doesn't exist (for existing databases)
+    try {
+      this.db.exec(`ALTER TABLE registrations ADD COLUMN phone_number TEXT`);
+    } catch (error) {
+      // Column already exists, ignore error
+    }
 
     // Create index for faster lookups
     this.db.exec(`
@@ -49,10 +57,10 @@ class RegistrationDatabase {
   addRegistration(data) {
     const stmt = this.db.prepare(`
       INSERT INTO registrations (
-        user_id, username, first_name, last_name, language_code,
+        user_id, username, first_name, last_name, phone_number, language_code,
         payment_method, transaction_id, provider_payment_charge_id,
         amount, currency, payload
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -60,6 +68,7 @@ class RegistrationDatabase {
       data.username,
       data.first_name,
       data.last_name,
+      data.phone_number || null,
       data.language_code,
       data.payment_method,
       data.transaction_id,
@@ -141,7 +150,7 @@ class RegistrationDatabase {
   exportToCSV() {
     const registrations = this.getAllRegistrations(10000); // Get all
 
-    const headers = ['ID', 'User ID', 'Username', 'First Name', 'Last Name', 'Payment Method',
+    const headers = ['ID', 'User ID', 'Username', 'First Name', 'Last Name', 'Phone Number', 'Payment Method',
                      'Transaction ID', 'Amount', 'Currency', 'Registration Date'];
 
     const rows = registrations.map(reg => [
@@ -150,6 +159,7 @@ class RegistrationDatabase {
       reg.username || '',
       reg.first_name || '',
       reg.last_name || '',
+      reg.phone_number || '',
       reg.payment_method,
       reg.transaction_id,
       reg.amount,

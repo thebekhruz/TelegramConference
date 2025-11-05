@@ -7,3 +7,7 @@ data/
 *.db-shm
 *.db-wal
 *.csv
+.env.example
+# Allow backups directory to be tracked
+!backups/
+!backups/registrations_latest.csv
