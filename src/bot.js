@@ -48,6 +48,14 @@ const userSessions = new Map();
 const CONFERENCE_PRICE = parseInt(process.env.CONFERENCE_PRICE) || 200000; // Price in UZS
 const CURRENCY = process.env.CURRENCY || 'UZS';
 const PAYME_TOKEN = process.env.PAYME_PROVIDER_TOKEN; // PayMe payment provider token
+
+// Validate PayMe token on startup
+if (!PAYME_TOKEN || !PAYME_TOKEN.trim()) {
+  console.warn('⚠️ WARNING: PAYME_PROVIDER_TOKEN is not set or empty. Payment functionality will not work.');
+} else {
+  console.log(`✅ PayMe provider token configured (length: ${PAYME_TOKEN.trim().length})`);
+}
+
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
 const EVENT_LOCATION_LAT = 41.255280019377366; // Event location latitude
 const EVENT_LOCATION_LON = 69.33020330776047; // Event location longitude
@@ -539,8 +547,10 @@ bot.on('callback_query', async (query) => {
 
     // Only PayMe is supported
     if (paymentMethod === 'payme') {
-      if (!PAYME_TOKEN) {
-        bot.sendMessage(chatId, '❌ PayMe provider token is not configured. Please contact the administrator.');
+      if (!PAYME_TOKEN || !PAYME_TOKEN.trim()) {
+        bot.sendMessage(chatId, '❌ <b>Ошибка конфигурации</b>\n\nPayMe provider token не настроен. Пожалуйста, свяжитесь с администратором.', {
+          parse_mode: 'HTML'
+        });
         return;
       }
 
@@ -549,12 +559,30 @@ bot.on('callback_query', async (query) => {
       session.providerName = 'PayMe';
       userSessions.set(userId, session);
 
-      // Send invoice
+      // Send invoice with error handling
       try {
         await sendInvoice(chatId, userId, lang, PAYME_TOKEN, 'PayMe');
       } catch (error) {
         console.error('Error sending invoice:', error);
-        bot.sendMessage(chatId, getText(lang, 'error_occurred'));
+        
+        // Provide more detailed error message to user
+        let errorMessage = '❌ <b>Ошибка при создании счета</b>\n\n';
+        
+        if (error.response?.body?.description) {
+          const errorDesc = error.response.body.description;
+          if (errorDesc.includes('provider_token') || errorDesc.includes('token')) {
+            errorMessage += 'Проблема с конфигурацией платежной системы. Пожалуйста, свяжитесь с администратором.';
+          } else {
+            errorMessage += `Ошибка: ${errorDesc}`;
+          }
+        } else {
+          errorMessage += 'Не удалось создать счет для оплаты. Пожалуйста, попробуйте позже или свяжитесь с поддержкой.';
+        }
+        
+        bot.sendMessage(chatId, errorMessage, {
+          parse_mode: 'HTML',
+          reply_markup: getPaymentMethodKeyboard(lang)
+        });
       }
     }
   }
@@ -684,36 +712,50 @@ async function sendInvoice(chatId, userId, lang, providerToken, providerName) {
   const title = getText(lang, 'invoice_title');
   const description = getText(lang, 'payment_description');
 
-  const invoice = {
-    chat_id: chatId,
-    title: title,
-    description: description,
-    payload: `conference_${userId}_${Date.now()}`,
-    provider_token: providerToken,
-    currency: CURRENCY,
-    prices: [
-      {
-        label: title,
-        amount: CONFERENCE_PRICE * 100 // Amount in smallest currency unit (tyiyn for UZS)
-      }
-    ],
-    start_parameter: 'conference-registration',
-    protect_content: false
-  };
+  // Ensure provider token is trimmed and valid
+  const cleanProviderToken = providerToken ? providerToken.trim() : null;
+  
+  if (!cleanProviderToken) {
+    throw new Error('PayMe provider token is not configured');
+  }
 
-  await bot.sendInvoice(
-    invoice.chat_id,
-    invoice.title,
-    invoice.description,
-    invoice.payload,
-    invoice.provider_token,
-    invoice.currency,
-    invoice.prices,
-    {
-      start_parameter: invoice.start_parameter,
-      protect_content: invoice.protect_content
-    }
-  );
+  // Prepare invoice payload - must be unique per invoice
+  const payload = `conference_${userId}_${Date.now()}`;
+  
+  // Amount in smallest currency unit (tyiyn for UZS)
+  // For UZS: 1 UZS = 100 tyiyn, so 200000 UZS = 20000000 tyiyn
+  const amountInTyiyn = CONFERENCE_PRICE * 100;
+
+  try {
+    await bot.sendInvoice(
+      chatId,
+      title,
+      description,
+      payload,
+      cleanProviderToken,
+      CURRENCY,
+      [
+        {
+          label: title,
+          amount: amountInTyiyn
+        }
+      ],
+      {
+        start_parameter: 'conference-registration',
+        protect_content: false
+      }
+    );
+    
+    console.log(`📤 Invoice sent to user ${userId} for ${CONFERENCE_PRICE} ${CURRENCY}`);
+  } catch (error) {
+    console.error('❌ Error sending invoice:', error);
+    console.error('Error details:', {
+      message: error.message,
+      response: error.response?.body,
+      providerToken: cleanProviderToken ? `${cleanProviderToken.substring(0, 10)}...` : 'missing'
+    });
+    throw error;
+  }
 }
 
 /**
