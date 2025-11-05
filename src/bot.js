@@ -385,6 +385,27 @@ bot.onText(/\/adminhelp/, (msg) => {
   bot.sendMessage(chatId, helpMessage, { parse_mode: 'HTML' });
 });
 
+// Helper function to safely answer callback queries
+async function answerCallbackQuery(queryId, options = {}) {
+  try {
+    await bot.answerCallbackQuery(queryId, options);
+  } catch (error) {
+    // Ignore errors for expired or invalid callback queries
+    const errorMessage = error.message || '';
+    const errorDescription = error.response?.body?.description || error.description || '';
+    const fullErrorText = (errorMessage + ' ' + errorDescription).toLowerCase();
+    
+    if (fullErrorText.includes('query is too old') || 
+        fullErrorText.includes('query id is invalid') ||
+        fullErrorText.includes('response timeout expired')) {
+      console.log(`⚠️ Callback query ${queryId} expired or invalid, ignoring...`);
+      return;
+    }
+    // Log other errors but don't crash
+    console.error('Error answering callback query:', error.message || error);
+  }
+}
+
 // Handle callback queries
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
@@ -397,11 +418,15 @@ bot.on('callback_query', async (query) => {
     const selectedLang = data.replace('lang_', '');
     setUserLanguage(userId, selectedLang);
 
-    await bot.answerCallbackQuery(query.id);
-    await bot.editMessageText(getText(selectedLang, 'language_changed'), {
-      chat_id: chatId,
-      message_id: messageId
-    });
+    await answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageText(getText(selectedLang, 'language_changed'), {
+        chat_id: chatId,
+        message_id: messageId
+      });
+    } catch (error) {
+      console.error('Error editing message:', error.message);
+    }
 
     setTimeout(() => {
       bot.sendMessage(chatId, getText(selectedLang, 'main_menu'), {
@@ -415,7 +440,7 @@ bot.on('callback_query', async (query) => {
     const lang = getUserLanguage(userId);
     const paymentMethod = data.replace('pay_', '');
 
-    await bot.answerCallbackQuery(query.id);
+    await answerCallbackQuery(query.id);
 
     // Check if contact information was shared
     const session = userSessions.get(userId) || {};
@@ -459,11 +484,15 @@ bot.on('callback_query', async (query) => {
   // Cancel payment
   if (data === 'cancel_payment') {
     const lang = getUserLanguage(userId);
-    await bot.answerCallbackQuery(query.id);
-    await bot.editMessageText(getText(lang, 'payment_cancelled'), {
-      chat_id: chatId,
-      message_id: messageId
-    });
+    await answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageText(getText(lang, 'payment_cancelled'), {
+        chat_id: chatId,
+        message_id: messageId
+      });
+    } catch (error) {
+      console.error('Error editing message:', error.message);
+    }
   }
 
   // Contact confirmation flow
@@ -471,20 +500,28 @@ bot.on('callback_query', async (query) => {
     const lang = getUserLanguage(userId);
     const session = userSessions.get(userId) || {};
     
-    await bot.answerCallbackQuery(query.id);
+    await answerCallbackQuery(query.id);
     
     if (!session.phone_number) {
-      await bot.editMessageText(getText(lang, 'contact_error'), {
-        chat_id: chatId,
-        message_id: messageId
-      });
+      try {
+        await bot.editMessageText(getText(lang, 'contact_error'), {
+          chat_id: chatId,
+          message_id: messageId
+        });
+      } catch (error) {
+        console.error('Error editing message:', error.message);
+      }
       return;
     }
 
-    await bot.editMessageText(getText(lang, 'contact_confirm'), {
-      chat_id: chatId,
-      message_id: messageId
-    });
+    try {
+      await bot.editMessageText(getText(lang, 'contact_confirm'), {
+        chat_id: chatId,
+        message_id: messageId
+      });
+    } catch (error) {
+      console.error('Error editing message:', error.message);
+    }
 
     // Show payment method selection
     setTimeout(() => {
@@ -501,9 +538,13 @@ bot.on('callback_query', async (query) => {
     session.editing = 'name';
     userSessions.set(userId, session);
     
-    await bot.answerCallbackQuery(query.id);
+    await answerCallbackQuery(query.id);
     const promptText = lang === 'ru' ? 'Пожалуйста, отправьте ваше полное имя:' : 'Please send your full name:';
-    await bot.sendMessage(chatId, promptText);
+    try {
+      await bot.sendMessage(chatId, promptText);
+    } catch (error) {
+      console.error('Error sending message:', error.message);
+    }
   }
 
   // Edit phone
@@ -513,19 +554,27 @@ bot.on('callback_query', async (query) => {
     session.editing = 'phone';
     userSessions.set(userId, session);
     
-    await bot.answerCallbackQuery(query.id);
+    await answerCallbackQuery(query.id);
     const promptText = lang === 'ru' ? 'Пожалуйста, отправьте ваш номер телефона:' : 'Please send your phone number:';
-    await bot.sendMessage(chatId, promptText);
+    try {
+      await bot.sendMessage(chatId, promptText);
+    } catch (error) {
+      console.error('Error sending message:', error.message);
+    }
   }
 
   // Cancel contact
   if (data === 'cancel_contact') {
     const lang = getUserLanguage(userId);
-    await bot.answerCallbackQuery(query.id);
-    await bot.editMessageText(getText(lang, 'payment_cancelled'), {
-      chat_id: chatId,
-      message_id: messageId
-    });
+    await answerCallbackQuery(query.id);
+    try {
+      await bot.editMessageText(getText(lang, 'payment_cancelled'), {
+        chat_id: chatId,
+        message_id: messageId
+      });
+    } catch (error) {
+      console.error('Error editing message:', error.message);
+    }
     userSessions.delete(userId);
   }
 });
@@ -876,6 +925,19 @@ bot.on('message', async (msg) => {
 // Error handling
 bot.on('polling_error', (error) => {
   console.error('Polling error:', error);
+});
+
+// Catch unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit, just log the error
+});
+
+// Catch uncaught exceptions
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // For critical errors, we might want to exit, but for now just log
+  // In production, you might want to restart the bot here
 });
 
 // Graceful shutdown
