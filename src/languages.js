@@ -9,6 +9,7 @@ const languages = {
     register_button: "📝 Register for Conference",
     change_language: "🌐 Change Language",
     help_button: "ℹ️ Help",
+    location_button: "📍 Event Location",
 
     registration_info: "🎓 Conference Registration\n\n" +
                       "📅 Join our upcoming conference!\n" +
@@ -22,7 +23,11 @@ const languages = {
     contact_shared: "✅ Contact information received!\n\n" +
                     "Name: {contact_name}\n" +
                     "Phone: {phone_number}\n\n" +
-                    "Now please select your payment method:",
+                    "Is this information correct?",
+    contact_confirm: "✅ Confirmed! Proceeding to payment...",
+    contact_edit_name: "✏️ Edit Name",
+    contact_edit_phone: "✏️ Edit Phone",
+    contact_confirm_button: "✅ Confirm and Continue",
     contact_error: "❌ Please share your contact information using the button below.",
 
     payme_button: "💳 Pay with PayMe",
@@ -66,6 +71,7 @@ const languages = {
     register_button: "📝 Зарегистрироваться на конференцию",
     change_language: "🌐 Изменить язык",
     help_button: "ℹ️ Помощь",
+    location_button: "📍 Место проведения",
 
     registration_info: "🎓 Регистрация на конференцию\n\n" +
                       "📅 Присоединяйтесь к нашей предстоящей конференции!\n" +
@@ -79,7 +85,11 @@ const languages = {
     contact_shared: "✅ Контактная информация получена!\n\n" +
                     "Имя: {contact_name}\n" +
                     "Телефон: {phone_number}\n\n" +
-                    "Теперь выберите способ оплаты:",
+                    "Верна ли эта информация?",
+    contact_confirm: "✅ Подтверждено! Переходим к оплате...",
+    contact_edit_name: "✏️ Изменить имя",
+    contact_edit_phone: "✏️ Изменить телефон",
+    contact_confirm_button: "✅ Подтвердить и продолжить",
     contact_error: "❌ Пожалуйста, поделитесь своей контактной информацией, используя кнопку ниже.",
 
     payme_button: "💳 Оплатить через PayMe",

@@ -2,6 +2,8 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { getText } = require('./languages');
 const RegistrationDatabase = require('./database');
+const fs = require('fs');
+const path = require('path');
 
 // Initialize bot
 const token = process.env.TELEGRAM_BOT_TOKEN;
@@ -27,6 +29,9 @@ const CURRENCY = process.env.CURRENCY || 'UZS';
 const PAYME_TOKEN = process.env.PAYME_PROVIDER_TOKEN;
 const CLICK_TOKEN = process.env.CLICK_PROVIDER_TOKEN;
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
+const EVENT_LOCATION_LAT = 41.255280019377366;
+const EVENT_LOCATION_LON = 69.33020330776047;
+const WELCOME_PHOTO_PATH = process.env.WELCOME_PHOTO_PATH || './welcome_photo.jpg';
 
 console.log('🤖 Telegram Conference Bot started!');
 console.log(`💰 Conference Price: ${CONFERENCE_PRICE} ${CURRENCY}`);
@@ -84,6 +89,7 @@ function getMainMenuKeyboard(lang) {
   return {
     keyboard: [
       [{ text: getText(lang, 'register_button') }],
+      [{ text: getText(lang, 'location_button') }],
       [{ text: getText(lang, 'change_language') }, { text: getText(lang, 'help_button') }]
     ],
     resize_keyboard: true,
@@ -107,6 +113,24 @@ function getContactRequestKeyboard(lang) {
   };
 }
 
+// Create contact confirmation keyboard
+function getContactConfirmationKeyboard(lang) {
+  return {
+    inline_keyboard: [
+      [
+        { text: getText(lang, 'contact_edit_name'), callback_data: 'edit_name' },
+        { text: getText(lang, 'contact_edit_phone'), callback_data: 'edit_phone' }
+      ],
+      [
+        { text: getText(lang, 'contact_confirm_button'), callback_data: 'confirm_contact' }
+      ],
+      [
+        { text: getText(lang, 'cancel_button'), callback_data: 'cancel_contact' }
+      ]
+    ]
+  };
+}
+
 // Create payment method selection keyboard
 function getPaymentMethodKeyboard(lang) {
   return {
@@ -124,15 +148,81 @@ function getPaymentMethodKeyboard(lang) {
   };
 }
 
+// Create backup of paid registrations
+function createBackup() {
+  try {
+    const backupDir = path.join(__dirname, '..', 'backups');
+    if (!fs.existsSync(backupDir)) {
+      fs.mkdirSync(backupDir, { recursive: true });
+    }
+
+    const csv = db.exportToCSV();
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const backupFileName = `registrations_backup_${timestamp}.csv`;
+    const backupPath = path.join(backupDir, backupFileName);
+
+    fs.writeFileSync(backupPath, csv, 'utf8');
+    console.log(`💾 Backup created: ${backupPath}`);
+
+    // Also create a latest backup file
+    const latestBackupPath = path.join(backupDir, 'registrations_latest.csv');
+    fs.writeFileSync(latestBackupPath, csv, 'utf8');
+    console.log(`💾 Latest backup updated: ${latestBackupPath}`);
+
+    return backupPath;
+  } catch (error) {
+    console.error('❌ Error creating backup:', error);
+    return null;
+  }
+}
+
+// Send welcome message with photo and location
+async function sendWelcomeMessage(chatId, userId, lang) {
+  const welcomeText = `Педагогический Форум
+
+«InspireEd Tashkent»
+
+29 ноября 2025
+
+Русское отделение Oxbridge International
+School приглашает вас на
+международный педагогический форум
+- площадку для обмена ценным опытом и налаживания горизонтальных связей в профессиональном педагогическом сообществе.
+
+${getText(lang, 'welcome')}`;
+
+  // Try to send photo if it exists
+  const photoPath = path.resolve(WELCOME_PHOTO_PATH);
+  
+  try {
+    if (fs.existsSync(photoPath)) {
+      await bot.sendPhoto(chatId, photoPath, {
+        caption: welcomeText,
+        reply_markup: getLanguageKeyboard()
+      });
+    } else {
+      // Send without photo if file doesn't exist
+      await bot.sendMessage(chatId, welcomeText, {
+        reply_markup: getLanguageKeyboard()
+      });
+      console.log(`⚠️ Welcome photo not found at ${photoPath}. Using text-only welcome.`);
+    }
+  } catch (error) {
+    console.error('Error sending welcome photo:', error);
+    // Fallback to text-only message
+    await bot.sendMessage(chatId, welcomeText, {
+      reply_markup: getLanguageKeyboard()
+    });
+  }
+}
+
 // /start command
 bot.onText(/\/start/, (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
   const lang = getUserLanguage(userId);
 
-  bot.sendMessage(chatId, getText(lang, 'welcome'), {
-    reply_markup: getLanguageKeyboard()
-  });
+  sendWelcomeMessage(chatId, userId, lang);
 });
 
 // /language command
@@ -375,6 +465,69 @@ bot.on('callback_query', async (query) => {
       message_id: messageId
     });
   }
+
+  // Contact confirmation flow
+  if (data === 'confirm_contact') {
+    const lang = getUserLanguage(userId);
+    const session = userSessions.get(userId) || {};
+    
+    await bot.answerCallbackQuery(query.id);
+    
+    if (!session.phone_number) {
+      await bot.editMessageText(getText(lang, 'contact_error'), {
+        chat_id: chatId,
+        message_id: messageId
+      });
+      return;
+    }
+
+    await bot.editMessageText(getText(lang, 'contact_confirm'), {
+      chat_id: chatId,
+      message_id: messageId
+    });
+
+    // Show payment method selection
+    setTimeout(() => {
+      bot.sendMessage(chatId, getText(lang, 'registration_info'), {
+        reply_markup: getPaymentMethodKeyboard(lang)
+      });
+    }, 500);
+  }
+
+  // Edit name
+  if (data === 'edit_name') {
+    const lang = getUserLanguage(userId);
+    const session = userSessions.get(userId) || {};
+    session.editing = 'name';
+    userSessions.set(userId, session);
+    
+    await bot.answerCallbackQuery(query.id);
+    const promptText = lang === 'ru' ? 'Пожалуйста, отправьте ваше полное имя:' : 'Please send your full name:';
+    await bot.sendMessage(chatId, promptText);
+  }
+
+  // Edit phone
+  if (data === 'edit_phone') {
+    const lang = getUserLanguage(userId);
+    const session = userSessions.get(userId) || {};
+    session.editing = 'phone';
+    userSessions.set(userId, session);
+    
+    await bot.answerCallbackQuery(query.id);
+    const promptText = lang === 'ru' ? 'Пожалуйста, отправьте ваш номер телефона:' : 'Please send your phone number:';
+    await bot.sendMessage(chatId, promptText);
+  }
+
+  // Cancel contact
+  if (data === 'cancel_contact') {
+    const lang = getUserLanguage(userId);
+    await bot.answerCallbackQuery(query.id);
+    await bot.editMessageText(getText(lang, 'payment_cancelled'), {
+      chat_id: chatId,
+      message_id: messageId
+    });
+    userSessions.delete(userId);
+  }
 });
 
 // Send invoice function
@@ -444,11 +597,22 @@ bot.on('successful_payment', async (msg) => {
 
   // Save registration to database
   try {
+    // Use edited contact name if available, otherwise use Telegram profile name
+    let firstName = user.first_name || null;
+    let lastName = user.last_name || null;
+    
+    if (session.contact_name) {
+      // If contact name was edited, use it
+      const nameParts = session.contact_name.trim().split(/\s+/);
+      firstName = nameParts[0] || firstName;
+      lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
+    }
+
     const registrationId = db.addRegistration({
       user_id: userId,
       username: user.username || null,
-      first_name: user.first_name || null,
-      last_name: user.last_name || null,
+      first_name: firstName,
+      last_name: lastName,
       phone_number: session.phone_number || null,
       language_code: user.language_code || lang,
       payment_method: session.paymentMethod || 'unknown',
@@ -460,6 +624,9 @@ bot.on('successful_payment', async (msg) => {
     });
 
     console.log(`📝 Registration saved to database with ID: ${registrationId}`);
+
+    // Create backup after successful payment
+    createBackup();
 
     // Enhanced success message to user
     const userName = user.first_name || 'Participant';
@@ -565,21 +732,24 @@ bot.on('message', async (msg) => {
     const session = userSessions.get(userId);
     session.phone_number = phoneNumber;
     session.contact_name = contactName;
+    session.editing = null; // Clear any editing state
 
-    // Confirm contact received and show payment options
+    // Confirm contact received and ask for confirmation
     await bot.sendMessage(chatId, getText(lang, 'contact_shared', {
       contact_name: contactName,
       phone_number: phoneNumber
     }), {
-      reply_markup: { remove_keyboard: true }
+      reply_markup: { remove_keyboard: true },
+      parse_mode: 'HTML'
     });
 
-    // Show payment method selection
-    setTimeout(() => {
-      bot.sendMessage(chatId, getText(lang, 'registration_info'), {
-        reply_markup: getPaymentMethodKeyboard(lang)
-      });
-    }, 500);
+    // Show confirmation buttons
+    const confirmPrompt = lang === 'ru' 
+      ? 'Пожалуйста, подтвердите вашу информацию или отредактируйте при необходимости:'
+      : 'Please confirm your information or edit if needed:';
+    await bot.sendMessage(chatId, confirmPrompt, {
+      reply_markup: getContactConfirmationKeyboard(lang)
+    });
 
     return;
   }
@@ -611,6 +781,14 @@ bot.on('message', async (msg) => {
       }
     }
 
+    // Location button
+    if (text === getText(lang, 'location_button')) {
+      bot.sendLocation(chatId, EVENT_LOCATION_LAT, EVENT_LOCATION_LON, {
+        reply_markup: getMainMenuKeyboard(lang)
+      });
+      return;
+    }
+
     // Change language button
     if (text === getText(lang, 'change_language')) {
       bot.sendMessage(chatId, getText(lang, 'select_language'), {
@@ -625,13 +803,61 @@ bot.on('message', async (msg) => {
       });
     }
 
-    // If user sends text during contact request, remind them to share contact
-    if (!msg.contact && text && !text.startsWith('/')) {
+    // Handle text input for editing contact info
+    if (text && !text.startsWith('/')) {
       const session = userSessions.get(userId);
+      
+      // Check if user is editing contact info
+      if (session && session.editing) {
+        if (session.editing === 'name') {
+          session.contact_name = text;
+          session.editing = null;
+          userSessions.set(userId, session);
+          
+          // Show updated contact info for confirmation
+          await bot.sendMessage(chatId, getText(lang, 'contact_shared', {
+            contact_name: session.contact_name,
+            phone_number: session.phone_number
+          }), {
+            reply_markup: getContactConfirmationKeyboard(lang),
+            parse_mode: 'HTML'
+          });
+          return;
+        } else if (session.editing === 'phone') {
+          // Validate phone number (basic validation)
+          const phoneRegex = /^\+?[1-9]\d{1,14}$/;
+          const cleanPhone = text.replace(/\D/g, '');
+          
+          if (!phoneRegex.test(cleanPhone) && !phoneRegex.test(text)) {
+            const errorMsg = lang === 'ru'
+              ? '❌ Неверный формат номера телефона. Пожалуйста, отправьте действительный номер телефона (например, +998901234567 или 901234567):'
+              : '❌ Invalid phone number format. Please send a valid phone number (e.g., +998901234567 or 901234567):';
+            await bot.sendMessage(chatId, errorMsg);
+            return;
+          }
+          
+          session.phone_number = cleanPhone.startsWith('+') ? text : (text.startsWith('998') ? '+' + text : '+998' + cleanPhone);
+          session.editing = null;
+          userSessions.set(userId, session);
+          
+          // Show updated contact info for confirmation
+          await bot.sendMessage(chatId, getText(lang, 'contact_shared', {
+            contact_name: session.contact_name,
+            phone_number: session.phone_number
+          }), {
+            reply_markup: getContactConfirmationKeyboard(lang),
+            parse_mode: 'HTML'
+          });
+          return;
+        }
+      }
+      
+      // If user sends text during contact request, remind them to share contact
       if (!session || !session.phone_number) {
         // Check if this is not one of the recognized buttons
         const recognizedButtons = [
           getText(lang, 'register_button'),
+          getText(lang, 'location_button'),
           getText(lang, 'change_language'),
           getText(lang, 'help_button'),
           getText(lang, 'cancel_button')

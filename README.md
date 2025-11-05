@@ -12,6 +12,10 @@ A Telegram bot for conference registration with integrated payment support for P
 - Real-time admin notifications for new registrations
 - Admin dashboard with statistics and reports
 - Export registrations to CSV
+- Automatic backup system for paid registrations
+- Contact information confirmation with edit capability
+- Event location sharing via Telegram location feature
+- Welcome message with photo support
 - Price: 200,000 UZS
 
 ## Setup
@@ -31,6 +35,7 @@ cp .env.example .env
    - Connect PayMe and Click payment providers via @BotFather
    - Get provider tokens for PayMe and Click
    - Set your admin user ID (send /start to @userinfobot to get your ID)
+   - (Optional) Set `WELCOME_PHOTO_PATH` to path of welcome photo (default: `./welcome_photo.jpg`)
 
 ## Payment Provider Setup
 
@@ -107,6 +112,28 @@ The bot uses SQLite to store registration data including:
 - Language preference
 
 Database file is automatically created at `./data/registrations.db` on first run.
+
+## Backup System
+
+The bot automatically creates backups of all paid registrations:
+- **Automatic backups**: Created after each successful payment
+- **Location**: `./backups/` directory
+- **Latest backup**: `registrations_latest.csv` - Always contains the most recent data
+- **Timestamped backups**: `registrations_backup_YYYY-MM-DDTHH-MM-SS.csv` - Historical backups
+
+**In case of server failure**, you can access all paid registrations from:
+- The `backups/registrations_latest.csv` file (most recent backup)
+- Or any timestamped backup file in the `backups/` directory
+
+The backup system ensures data safety even if the database or server fails.
+
+## Welcome Photo
+
+To add a welcome photo that appears when users start the bot:
+1. Place your welcome photo in the project root directory (or any accessible location)
+2. Set `WELCOME_PHOTO_PATH` in your `.env` file to the photo path
+3. Supported formats: JPG, PNG, GIF, WebP
+4. If no photo is found, the bot will send a text-only welcome message
 
 ## License
 

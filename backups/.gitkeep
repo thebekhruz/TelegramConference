@@ -1,0 +1,9 @@
+# Backups Directory
+
+This directory contains automatic backups of all paid registrations.
+
+- `registrations_latest.csv` - Always contains the most recent backup of all paid registrations
+- `registrations_backup_YYYY-MM-DDTHH-MM-SS.csv` - Timestamped backups created after each successful payment
+
+Backups are automatically created after each successful payment to ensure data safety even if the server fails.
+
