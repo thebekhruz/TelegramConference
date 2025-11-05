@@ -6,6 +6,7 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { getText } = require('./languages');
 const RegistrationDatabase = require('./database');
+const PayMePayment = require('./payme-payment');
 const fs = require('fs');
 const path = require('path');
 
@@ -47,16 +48,27 @@ const userSessions = new Map();
 
 const CONFERENCE_PRICE = parseInt(process.env.CONFERENCE_PRICE) || 200000; // Price in UZS
 const CURRENCY = process.env.CURRENCY || 'UZS';
-const PAYME_TOKEN = process.env.PAYME_PROVIDER_TOKEN; // PayMe payment provider token
-
-// Validate PayMe token on startup
-if (!PAYME_TOKEN || !PAYME_TOKEN.trim()) {
-  console.warn('⚠️ WARNING: PAYME_PROVIDER_TOKEN is not set or empty. Payment functionality will not work.');
-} else {
-  console.log(`✅ PayMe provider token configured (length: ${PAYME_TOKEN.trim().length})`);
-}
-
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
+
+// PayMe Direct Integration Configuration
+const PAYME_MERCHANT_ID = process.env.PAYME_MERCHANT_ID;
+const PAYME_SECRET_KEY = process.env.PAYME_SECRET_KEY;
+const PAYME_ENDPOINT = process.env.PAYME_ENDPOINT || 'https://checkout.paycom.uz';
+
+// Initialize PayMe Direct Payment
+let payme = null;
+if (PAYME_MERCHANT_ID && PAYME_SECRET_KEY) {
+  payme = new PayMePayment({
+    merchantId: PAYME_MERCHANT_ID,
+    secretKey: PAYME_SECRET_KEY,
+    endpoint: PAYME_ENDPOINT
+  });
+  console.log('✅ PayMe Direct payment initialized');
+  console.log(`   Merchant ID: ${PAYME_MERCHANT_ID}`);
+} else {
+  console.warn('⚠️  WARNING: PayMe credentials not set. Payment functionality will not work.');
+  console.warn('   Set PAYME_MERCHANT_ID and PAYME_SECRET_KEY in .env file');
+}
 const EVENT_LOCATION_LAT = 41.255280019377366; // Event location latitude
 const EVENT_LOCATION_LON = 69.33020330776047; // Event location longitude
 const WELCOME_PHOTO_PATH = process.env.WELCOME_PHOTO_PATH || './welcome_photo.jpg';
@@ -249,6 +261,140 @@ function createBackup() {
   } catch (error) {
     console.error('❌ Error creating backup:', error);
     return null;
+  }
+}
+
+/**
+ * Process manual payment verification
+ * Handles payment proof submitted by user (transaction ID or screenshot)
+ * @param {number} chatId - Chat ID
+ * @param {number} userId - User ID
+ * @param {Object} user - User object from Telegram
+ * @param {string} lang - Language code
+ * @param {Object} session - User session data
+ * @param {string} proofText - Payment proof (transaction ID or photo file_id)
+ */
+async function processPaymentProof(chatId, userId, user, lang, session, proofText) {
+  try {
+    // Generate transaction ID
+    const transactionId = session.orderId || `manual_${userId}_${Date.now()}`;
+    const amountInTyiyn = CONFERENCE_PRICE * 100;
+
+    // Use edited contact name if available, otherwise use Telegram profile name
+    let firstName = user.first_name || null;
+    let lastName = user.last_name || null;
+
+    if (session.contact_name) {
+      // If contact name was edited, use it
+      const nameParts = session.contact_name.trim().split(/\s+/);
+      firstName = nameParts[0] || firstName;
+      lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
+    }
+
+    // Save to database
+    const registrationId = db.addRegistration({
+      user_id: userId,
+      username: user.username || null,
+      first_name: firstName,
+      last_name: lastName,
+      phone_number: session.phone_number || null,
+      language_code: user.language_code || lang,
+      payment_method: 'payme',
+      transaction_id: transactionId,
+      provider_payment_charge_id: proofText, // Store the proof
+      amount: amountInTyiyn,
+      currency: CURRENCY,
+      payload: `payme_direct_${session.orderId}`
+    });
+
+    console.log(`✅ Manual payment registered: ID ${registrationId}`);
+    console.log(`   User: ${userId}, Order: ${session.orderId}`);
+    console.log(`   Proof: ${proofText.substring(0, 30)}...`);
+
+    // Create backup after successful registration
+    createBackup();
+
+    // Send confirmation to user
+    const userName = firstName || 'Участник';
+    const confirmationMessage = `
+✅ <b>Платеж получен!</b>
+
+Спасибо за регистрацию на конференцию!
+
+📋 <b>Детали регистрации:</b>
+👤 <b>Имя:</b> ${userName}${lastName ? ' ' + lastName : ''}
+📞 <b>Телефон:</b> ${session.phone_number || 'N/A'}
+💳 <b>Способ оплаты:</b> PayMe (Direct)
+💰 <b>Сумма:</b> ${CONFERENCE_PRICE.toLocaleString()} ${CURRENCY}
+🆔 <b>ID регистрации:</b> #${registrationId}
+🆔 <b>Номер заказа:</b> <code>${session.orderId}</code>
+📅 <b>Дата:</b> ${formatDate(new Date().toISOString())}
+
+⏳ <b>Ваш платеж проверяется администратором.</b>
+Вы получите окончательное подтверждение в ближайшее время.
+
+Ждем вас на конференции! 🎉
+    `.trim();
+
+    await bot.sendMessage(chatId, confirmationMessage, {
+      reply_markup: getMainMenuKeyboard(lang),
+      parse_mode: 'HTML'
+    });
+
+    // Send notification to admin for manual verification
+    if (ADMIN_USER_ID) {
+      try {
+        const stats = db.getStatistics();
+        const adminMessage = `
+🔔 <b>Новый платеж на проверке!</b>
+
+👤 <b>Информация о пользователе:</b>
+• <b>Имя:</b> ${firstName || 'N/A'}${lastName ? ' ' + lastName : ''}
+• <b>Username:</b> ${user.username ? '@' + user.username : 'N/A'}
+• <b>Телефон:</b> ${session.phone_number || 'N/A'}
+• <b>User ID:</b> <code>${userId}</code>
+
+💰 <b>Информация об оплате:</b>
+• <b>Способ:</b> PayMe (Direct)
+• <b>Сумма:</b> ${CONFERENCE_PRICE.toLocaleString()} ${CURRENCY}
+• <b>Номер заказа:</b> <code>${session.orderId}</code>
+• <b>Доказательство оплаты:</b> <code>${proofText.substring(0, 50)}${proofText.length > 50 ? '...' : ''}</code>
+
+⚠️ <b>Требуется действие:</b>
+Пожалуйста, проверьте этот платеж вручную в панели PayMe.
+
+📊 <b>Текущая статистика:</b>
+• <b>Всего регистраций:</b> ${stats.total_registrations}
+• <b>Общая выручка:</b> ${formatAmount(stats.total_revenue, CURRENCY)}
+• <b>PayMe:</b> ${stats.payme_registrations}
+
+🆔 <b>ID регистрации:</b> #${registrationId}
+📅 ${formatDate(new Date().toISOString())}
+
+<b>Для проверки:</b>
+1. Войдите в панель PayMe: https://checkout.paycom.uz
+2. Найдите заказ: <code>${session.orderId}</code>
+3. Подтвердите получение оплаты
+4. Свяжитесь с пользователем для подтверждения
+        `.trim();
+
+        await bot.sendMessage(ADMIN_USER_ID, adminMessage, {
+          parse_mode: 'HTML'
+        });
+
+        console.log(`📨 Admin notification sent to user ${ADMIN_USER_ID}`);
+      } catch (error) {
+        console.error('❌ Error sending admin notification:', error.message);
+      }
+    }
+
+    // Clear session
+    userSessions.delete(userId);
+
+    return registrationId;
+  } catch (error) {
+    console.error('❌ Error processing payment proof:', error);
+    throw error;
   }
 }
 
@@ -528,7 +674,7 @@ bot.on('callback_query', async (query) => {
   const messageId = query.message.message_id;
 
   // --------------------------------------------------------------------------
-  // Payment Method Selection Handler (PayMe only)
+  // Payment Method Selection Handler (PayMe Direct)
   // --------------------------------------------------------------------------
   if (data.startsWith('pay_')) {
     const lang = getUserLanguage(userId);
@@ -545,46 +691,111 @@ bot.on('callback_query', async (query) => {
       return;
     }
 
-    // Only PayMe is supported
+    // Only PayMe is supported (Direct Integration)
     if (paymentMethod === 'payme') {
-      if (!PAYME_TOKEN || !PAYME_TOKEN.trim()) {
-        bot.sendMessage(chatId, '❌ <b>Ошибка конфигурации</b>\n\nPayMe provider token не настроен. Пожалуйста, свяжитесь с администратором.', {
+      if (!payme) {
+        bot.sendMessage(chatId, '❌ <b>Ошибка конфигурации</b>\n\nPayMe не настроен. Пожалуйста, свяжитесь с администратором.', {
           parse_mode: 'HTML'
         });
         return;
       }
 
-      // Store payment method in session
+      // Generate unique order ID
+      const orderId = `conf_${userId}_${Date.now()}`;
+
+      // Store order info in session
+      session.orderId = orderId;
       session.paymentMethod = 'payme';
       session.providerName = 'PayMe';
+      session.awaitingPaymentProof = false; // Will be set to true after they click "I've Paid"
       userSessions.set(userId, session);
 
-      // Send invoice with error handling
-      try {
-        await sendInvoice(chatId, userId, lang, PAYME_TOKEN, 'PayMe');
-      } catch (error) {
-        console.error('Error sending invoice:', error);
-        
-        // Provide more detailed error message to user
-        let errorMessage = '❌ <b>Ошибка при создании счета</b>\n\n';
-        
-        if (error.response?.body?.description) {
-          const errorDesc = error.response.body.description;
-          if (errorDesc.includes('provider_token') || errorDesc.includes('token')) {
-            errorMessage += 'Проблема с конфигурацией платежной системы. Пожалуйста, свяжитесь с администратором.';
-          } else {
-            errorMessage += `Ошибка: ${errorDesc}`;
-          }
-        } else {
-          errorMessage += 'Не удалось создать счет для оплаты. Пожалуйста, попробуйте позже или свяжитесь с поддержкой.';
+      // Amount in tyiyn (smallest unit)
+      const amountInTyiyn = CONFERENCE_PRICE * 100;
+
+      // Generate PayMe payment link
+      const paymentUrl = payme.generatePaymentLink({
+        amount: amountInTyiyn,
+        orderId: orderId,
+        description: getText(lang, 'payment_description') || 'Регистрация на конференцию'
+      });
+
+      // Create payment message
+      const paymentMessage = `
+💳 <b>Оплата регистрации</b>
+
+Для завершения регистрации нажмите кнопку ниже для оплаты через PayMe.
+
+💰 <b>Сумма:</b> ${CONFERENCE_PRICE.toLocaleString()} ${CURRENCY}
+🆔 <b>Номер заказа:</b> <code>${orderId}</code>
+
+<i>После оплаты вернитесь в бот и нажмите "Я оплатил", затем отправьте ID транзакции или скриншот платежа.</i>
+      `.trim();
+
+      // Send message with PayMe button
+      bot.sendMessage(chatId, paymentMessage, {
+        parse_mode: 'HTML',
+        reply_markup: {
+          inline_keyboard: [
+            [
+              { text: '💳 Открыть PayMe', url: paymentUrl }
+            ],
+            [
+              { text: '✅ Я оплатил', callback_data: 'confirm_payment' }
+            ],
+            [
+              { text: '❌ Отмена', callback_data: 'cancel_payment' }
+            ]
+          ]
         }
-        
-        bot.sendMessage(chatId, errorMessage, {
-          parse_mode: 'HTML',
-          reply_markup: getPaymentMethodKeyboard(lang)
-        });
-      }
+      });
+
+      console.log(`📤 PayMe payment link sent to user ${userId}`);
+      console.log(`   Order ID: ${orderId}`);
+      console.log(`   Amount: ${CONFERENCE_PRICE} ${CURRENCY}`);
     }
+  }
+
+  // --------------------------------------------------------------------------
+  // Payment Confirmation Handler (User clicked "I've Paid")
+  // --------------------------------------------------------------------------
+  if (data === 'confirm_payment') {
+    const lang = getUserLanguage(userId);
+    const session = userSessions.get(userId) || {};
+
+    await answerCallbackQuery(query.id);
+
+    if (!session.orderId) {
+      bot.sendMessage(chatId, '❌ <b>Ошибка</b>\n\nНе найдена информация о заказе. Пожалуйста, начните регистрацию заново.', {
+        parse_mode: 'HTML'
+      });
+      return;
+    }
+
+    // Ask for payment proof
+    const proofMessage = `
+📝 <b>Подтверждение оплаты</b>
+
+Пожалуйста, отправьте:
+
+1️⃣ ID транзакции PayMe
+   <b>ИЛИ</b>
+2️⃣ Скриншот платежа
+
+🆔 <b>Номер заказа:</b> <code>${session.orderId}</code>
+
+<i>После проверки администратором вы получите подтверждение регистрации.</i>
+    `.trim();
+
+    bot.sendMessage(chatId, proofMessage, {
+      parse_mode: 'HTML'
+    });
+
+    // Set session to await payment proof
+    session.awaitingPaymentProof = true;
+    userSessions.set(userId, session);
+
+    console.log(`⏳ Waiting for payment proof from user ${userId}`);
   }
 
   // --------------------------------------------------------------------------
@@ -959,6 +1170,36 @@ bot.on('message', async (msg) => {
       reply_markup: getContactConfirmationKeyboard(lang)
     });
 
+    return;
+  }
+
+  // --------------------------------------------------------------------------
+  // Payment Proof Submission Handler
+  // --------------------------------------------------------------------------
+  const session = userSessions.get(userId) || {};
+
+  // Check if user is submitting payment proof (text or photo)
+  if (session.awaitingPaymentProof && (msg.text || msg.photo)) {
+    let proofText = '';
+
+    if (msg.text) {
+      proofText = msg.text;
+    } else if (msg.photo) {
+      // If photo submitted, use file_id as proof
+      proofText = `photo:${msg.photo[msg.photo.length - 1].file_id}`;
+    }
+
+    try {
+      // Process payment proof and register user
+      await processPaymentProof(chatId, userId, msg.from, lang, session, proofText);
+    } catch (error) {
+      console.error('Error processing payment proof:', error);
+      bot.sendMessage(
+        chatId,
+        '❌ <b>Ошибка при обработке платежа</b>\n\nПожалуйста, попробуйте позже или свяжитесь с поддержкой.',
+        { parse_mode: 'HTML' }
+      );
+    }
     return;
   }
 
