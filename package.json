@@ -5,7 +5,11 @@
   "main": "src/bot.js",
   "scripts": {
     "start": "node src/bot.js",
-    "dev": "nodemon src/bot.js"
+    "dev": "nodemon src/bot.js",
+    "attendance": "node scripts/attendance-list.js",
+    "attendance:csv": "node scripts/attendance-list.js csv",
+    "attendance:alpha": "node scripts/attendance-list.js alpha",
+    "search": "node scripts/search-attendee.js"
   },
   "keywords": [
     "telegram",
