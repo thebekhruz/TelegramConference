@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node src/bot.js",
     "dev": "nodemon src/bot.js",
+    "test": "node test-bot.js",
+    "clear-db": "node clear-database.js",
     "test-payment": "node test-payment.js",
     "attendance": "node scripts/attendance-list.js",
     "attendance:csv": "node scripts/attendance-list.js csv",
