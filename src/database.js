@@ -32,15 +32,35 @@ class RegistrationDatabase {
         currency TEXT NOT NULL,
         payload TEXT,
         registration_date DATETIME DEFAULT CURRENT_TIMESTAMP,
-        status TEXT DEFAULT 'completed'
+        status TEXT DEFAULT 'completed',
+        order_id TEXT UNIQUE,
+        payme_transaction_id TEXT,
+        payment_in_progress BOOLEAN DEFAULT 0,
+        payment_completed BOOLEAN DEFAULT 1,
+        payment_completed_at DATETIME,
+        payment_cancelled BOOLEAN DEFAULT 0,
+        cancel_reason INTEGER
       )
     `);
 
-    // Add phone_number column if it doesn't exist (for existing databases)
-    try {
-      this.db.exec(`ALTER TABLE registrations ADD COLUMN phone_number TEXT`);
-    } catch (error) {
-      // Column already exists, ignore error
+    // Add columns if they don't exist (for existing databases)
+    const columnsToAdd = [
+      'phone_number TEXT',
+      'order_id TEXT UNIQUE',
+      'payme_transaction_id TEXT',
+      'payment_in_progress BOOLEAN DEFAULT 0',
+      'payment_completed BOOLEAN DEFAULT 1',
+      'payment_completed_at DATETIME',
+      'payment_cancelled BOOLEAN DEFAULT 0',
+      'cancel_reason INTEGER'
+    ];
+
+    for (const column of columnsToAdd) {
+      try {
+        this.db.exec(`ALTER TABLE registrations ADD COLUMN ${column}`);
+      } catch (error) {
+        // Column already exists, ignore error
+      }
     }
 
     // Create index for faster lookups
@@ -48,6 +68,8 @@ class RegistrationDatabase {
       CREATE INDEX IF NOT EXISTS idx_user_id ON registrations(user_id);
       CREATE INDEX IF NOT EXISTS idx_transaction_id ON registrations(transaction_id);
       CREATE INDEX IF NOT EXISTS idx_registration_date ON registrations(registration_date);
+      CREATE INDEX IF NOT EXISTS idx_order_id ON registrations(order_id);
+      CREATE INDEX IF NOT EXISTS idx_payme_transaction_id ON registrations(payme_transaction_id);
     `);
 
     console.log('✅ Database initialized successfully');
@@ -59,8 +81,8 @@ class RegistrationDatabase {
       INSERT INTO registrations (
         user_id, username, first_name, last_name, phone_number, language_code,
         payment_method, transaction_id, provider_payment_charge_id,
-        amount, currency, payload
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        amount, currency, payload, order_id, payment_completed
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const result = stmt.run(
@@ -75,7 +97,9 @@ class RegistrationDatabase {
       data.provider_payment_charge_id,
       data.amount,
       data.currency,
-      data.payload
+      data.payload,
+      data.order_id || null,
+      data.payment_completed !== undefined ? (data.payment_completed ? 1 : 0) : 1
     );
 
     return result.lastInsertRowid;
@@ -85,6 +109,62 @@ class RegistrationDatabase {
   getRegistrationByTransactionId(transactionId) {
     const stmt = this.db.prepare('SELECT * FROM registrations WHERE transaction_id = ?');
     return stmt.get(transactionId);
+  }
+
+  // Get registration by order ID
+  getRegistrationByOrderId(orderId) {
+    const stmt = this.db.prepare('SELECT * FROM registrations WHERE order_id = ?');
+    return stmt.get(orderId);
+  }
+
+  // Update payment status (for PayMe Merchant API callbacks)
+  updateRegistrationPaymentStatus(orderId, statusData) {
+    const registration = this.getRegistrationByOrderId(orderId);
+    if (!registration) {
+      throw new Error(`Registration not found for order_id: ${orderId}`);
+    }
+
+    const updates = [];
+    const values = [];
+
+    if (statusData.payme_transaction_id !== undefined) {
+      updates.push('payme_transaction_id = ?');
+      values.push(statusData.payme_transaction_id);
+    }
+
+    if (statusData.payment_in_progress !== undefined) {
+      updates.push('payment_in_progress = ?');
+      values.push(statusData.payment_in_progress ? 1 : 0);
+    }
+
+    if (statusData.payment_completed !== undefined) {
+      updates.push('payment_completed = ?');
+      values.push(statusData.payment_completed ? 1 : 0);
+    }
+
+    if (statusData.payment_completed_at !== undefined) {
+      updates.push('payment_completed_at = ?');
+      values.push(statusData.payment_completed_at);
+    }
+
+    if (statusData.payment_cancelled !== undefined) {
+      updates.push('payment_cancelled = ?');
+      values.push(statusData.payment_cancelled ? 1 : 0);
+    }
+
+    if (statusData.cancel_reason !== undefined) {
+      updates.push('cancel_reason = ?');
+      values.push(statusData.cancel_reason);
+    }
+
+    if (updates.length === 0) {
+      return; // Nothing to update
+    }
+
+    values.push(orderId);
+    const sql = `UPDATE registrations SET ${updates.join(', ')} WHERE order_id = ?`;
+    const stmt = this.db.prepare(sql);
+    stmt.run(...values);
   }
 
   // Get all registrations for a user

@@ -6,7 +6,8 @@ require('dotenv').config();
 const TelegramBot = require('node-telegram-bot-api');
 const { getText } = require('./languages');
 const RegistrationDatabase = require('./database');
-const PayMePayment = require('./payme-payment');
+const PayMeMerchantAPI = require('./payme-merchant-api');
+const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
@@ -50,20 +51,18 @@ const CONFERENCE_PRICE = parseInt(process.env.CONFERENCE_PRICE) || 200000; // Pr
 const CURRENCY = process.env.CURRENCY || 'UZS';
 const ADMIN_USER_ID = process.env.ADMIN_USER_ID ? parseInt(process.env.ADMIN_USER_ID) : null;
 
-// PayMe Direct Integration Configuration
+// PayMe Merchant API Configuration
 const PAYME_MERCHANT_ID = process.env.PAYME_MERCHANT_ID;
 const PAYME_SECRET_KEY = process.env.PAYME_SECRET_KEY;
 const PAYME_ENDPOINT = process.env.PAYME_ENDPOINT || 'https://checkout.paycom.uz';
+const WEBHOOK_PORT = process.env.WEBHOOK_PORT || 3000;
+const WEBHOOK_PATH = process.env.WEBHOOK_PATH || '/payme-webhook';
 
-// Initialize PayMe Direct Payment
-let payme = null;
+// Initialize PayMe Merchant API
+let paymeMerchantAPI = null;
 if (PAYME_MERCHANT_ID && PAYME_SECRET_KEY) {
-  payme = new PayMePayment({
-    merchantId: PAYME_MERCHANT_ID,
-    secretKey: PAYME_SECRET_KEY,
-    endpoint: PAYME_ENDPOINT
-  });
-  console.log('✅ PayMe Direct payment initialized');
+  // Note: bot will be passed after initialization
+  console.log('✅ PayMe Merchant API initialized');
   console.log(`   Merchant ID: ${PAYME_MERCHANT_ID}`);
 } else {
   console.warn('⚠️  WARNING: PayMe credentials not set. Payment functionality will not work.');
@@ -274,129 +273,17 @@ function createBackup() {
  * @param {Object} session - User session data
  * @param {string} proofText - Payment proof (transaction ID or photo file_id)
  */
-async function processPaymentProof(chatId, userId, user, lang, session, proofText) {
-  try {
-    // Generate transaction ID
-    const transactionId = session.orderId || `manual_${userId}_${Date.now()}`;
-    const amountInTyiyn = CONFERENCE_PRICE * 100;
-
-    // Use edited contact name if available, otherwise use Telegram profile name
-    let firstName = user.first_name || null;
-    let lastName = user.last_name || null;
-
-    if (session.contact_name) {
-      // If contact name was edited, use it
-      const nameParts = session.contact_name.trim().split(/\s+/);
-      firstName = nameParts[0] || firstName;
-      lastName = nameParts.length > 1 ? nameParts.slice(1).join(' ') : null;
-    }
-
-    // Save to database
-    const registrationId = db.addRegistration({
-      user_id: userId,
-      username: user.username || null,
-      first_name: firstName,
-      last_name: lastName,
-      phone_number: session.phone_number || null,
-      language_code: user.language_code || lang,
-      payment_method: 'payme',
-      transaction_id: transactionId,
-      provider_payment_charge_id: proofText, // Store the proof
-      amount: amountInTyiyn,
-      currency: CURRENCY,
-      payload: `payme_direct_${session.orderId}`
-    });
-
-    console.log(`✅ Manual payment registered: ID ${registrationId}`);
-    console.log(`   User: ${userId}, Order: ${session.orderId}`);
-    console.log(`   Proof: ${proofText.substring(0, 30)}...`);
-
-    // Create backup after successful registration
-    createBackup();
-
-    // Send confirmation to user
-    const userName = firstName || 'Участник';
-    const confirmationMessage = `
-✅ <b>Платеж получен!</b>
-
-Спасибо за регистрацию на конференцию!
-
-📋 <b>Детали регистрации:</b>
-👤 <b>Имя:</b> ${userName}${lastName ? ' ' + lastName : ''}
-📞 <b>Телефон:</b> ${session.phone_number || 'N/A'}
-💳 <b>Способ оплаты:</b> PayMe (Direct)
-💰 <b>Сумма:</b> ${CONFERENCE_PRICE.toLocaleString()} ${CURRENCY}
-🆔 <b>ID регистрации:</b> #${registrationId}
-🆔 <b>Номер заказа:</b> <code>${session.orderId}</code>
-📅 <b>Дата:</b> ${formatDate(new Date().toISOString())}
-
-⏳ <b>Ваш платеж проверяется администратором.</b>
-Вы получите окончательное подтверждение в ближайшее время.
-
-Ждем вас на конференции! 🎉
-    `.trim();
-
-    await bot.sendMessage(chatId, confirmationMessage, {
-      reply_markup: getMainMenuKeyboard(lang),
-      parse_mode: 'HTML'
-    });
-
-    // Send notification to admin for manual verification
-    if (ADMIN_USER_ID) {
-      try {
-        const stats = db.getStatistics();
-        const adminMessage = `
-🔔 <b>Новый платеж на проверке!</b>
-
-👤 <b>Информация о пользователе:</b>
-• <b>Имя:</b> ${firstName || 'N/A'}${lastName ? ' ' + lastName : ''}
-• <b>Username:</b> ${user.username ? '@' + user.username : 'N/A'}
-• <b>Телефон:</b> ${session.phone_number || 'N/A'}
-• <b>User ID:</b> <code>${userId}</code>
-
-💰 <b>Информация об оплате:</b>
-• <b>Способ:</b> PayMe (Direct)
-• <b>Сумма:</b> ${CONFERENCE_PRICE.toLocaleString()} ${CURRENCY}
-• <b>Номер заказа:</b> <code>${session.orderId}</code>
-• <b>Доказательство оплаты:</b> <code>${proofText.substring(0, 50)}${proofText.length > 50 ? '...' : ''}</code>
-
-⚠️ <b>Требуется действие:</b>
-Пожалуйста, проверьте этот платеж вручную в панели PayMe.
-
-📊 <b>Текущая статистика:</b>
-• <b>Всего регистраций:</b> ${stats.total_registrations}
-• <b>Общая выручка:</b> ${formatAmount(stats.total_revenue, CURRENCY)}
-• <b>PayMe:</b> ${stats.payme_registrations}
-
-🆔 <b>ID регистрации:</b> #${registrationId}
-📅 ${formatDate(new Date().toISOString())}
-
-<b>Для проверки:</b>
-1. Войдите в панель PayMe: https://checkout.paycom.uz
-2. Найдите заказ: <code>${session.orderId}</code>
-3. Подтвердите получение оплаты
-4. Свяжитесь с пользователем для подтверждения
-        `.trim();
-
-        await bot.sendMessage(ADMIN_USER_ID, adminMessage, {
-          parse_mode: 'HTML'
-        });
-
-        console.log(`📨 Admin notification sent to user ${ADMIN_USER_ID}`);
-      } catch (error) {
-        console.error('❌ Error sending admin notification:', error.message);
-      }
-    }
-
-    // Clear session
-    userSessions.delete(userId);
-
-    return registrationId;
-  } catch (error) {
-    console.error('❌ Error processing payment proof:', error);
-    throw error;
-  }
-}
+// ============================================================================
+// REMOVED: Manual Payment Proof Processing
+// ============================================================================
+// The processPaymentProof function is no longer needed because PayMe Merchant API
+// webhooks handle payment confirmation automatically. When a user pays via PayMe,
+// the webhook (PerformTransaction) will:
+// 1. Update the database automatically
+// 2. Send confirmation to the user
+// 3. Notify the admin
+//
+// This eliminates the need for manual payment proof submission.
 
 // ============================================================================
 // WELCOME MESSAGE FUNCTIONALITY
@@ -691,9 +578,9 @@ bot.on('callback_query', async (query) => {
       return;
     }
 
-    // Only PayMe is supported (Direct Integration)
+    // Only PayMe is supported (Merchant API Integration)
     if (paymentMethod === 'payme') {
-      if (!payme) {
+      if (!paymeMerchantAPI) {
         bot.sendMessage(chatId, '❌ <b>Ошибка конфигурации</b>\n\nPayMe не настроен. Пожалуйста, свяжитесь с администратором.', {
           parse_mode: 'HTML'
         });
@@ -703,18 +590,45 @@ bot.on('callback_query', async (query) => {
       // Generate unique order ID
       const orderId = `conf_${userId}_${Date.now()}`;
 
+      // Amount in tyiyn (smallest unit)
+      const amountInTyiyn = CONFERENCE_PRICE * 100;
+
+      // Create registration in database immediately (payment pending)
+      try {
+        db.addRegistration({
+          user_id: userId,
+          username: query.from.username || null,
+          first_name: query.from.first_name || null,
+          last_name: query.from.last_name || null,
+          phone_number: session.phone_number || null,
+          language_code: lang,
+          payment_method: 'payme',
+          transaction_id: orderId, // Use order_id as transaction_id initially
+          provider_payment_charge_id: null,
+          amount: amountInTyiyn,
+          currency: CURRENCY,
+          payload: `payme_merchant_${orderId}`,
+          order_id: orderId,
+          payment_completed: false // Payment pending
+        });
+
+        console.log(`✅ Registration created in database: ${orderId} (payment pending)`);
+      } catch (error) {
+        console.error('Error creating registration:', error);
+        bot.sendMessage(chatId, '❌ <b>Ошибка</b>\n\nНе удалось создать регистрацию. Пожалуйста, попробуйте снова.', {
+          parse_mode: 'HTML'
+        });
+        return;
+      }
+
       // Store order info in session
       session.orderId = orderId;
       session.paymentMethod = 'payme';
       session.providerName = 'PayMe';
-      session.awaitingPaymentProof = false; // Will be set to true after they click "I've Paid"
       userSessions.set(userId, session);
 
-      // Amount in tyiyn (smallest unit)
-      const amountInTyiyn = CONFERENCE_PRICE * 100;
-
       // Generate PayMe payment link
-      const paymentUrl = payme.generatePaymentLink({
+      const paymentUrl = paymeMerchantAPI.generatePaymentLink({
         amount: amountInTyiyn,
         orderId: orderId,
         description: getText(lang, 'payment_description') || 'Регистрация на конференцию'
@@ -729,7 +643,9 @@ bot.on('callback_query', async (query) => {
 💰 <b>Сумма:</b> ${CONFERENCE_PRICE.toLocaleString()} ${CURRENCY}
 🆔 <b>Номер заказа:</b> <code>${orderId}</code>
 
-<i>После оплаты вернитесь в бот и нажмите "Я оплатил", затем отправьте ID транзакции или скриншот платежа.</i>
+<i>После успешной оплаты вы автоматически получите подтверждение в течение нескольких секунд.</i>
+
+⚠️ <i>Оплатите в течение 12 часов, иначе заказ будет отменен.</i>
       `.trim();
 
       // Send message with PayMe button
@@ -739,9 +655,6 @@ bot.on('callback_query', async (query) => {
           inline_keyboard: [
             [
               { text: '💳 Открыть PayMe', url: paymentUrl }
-            ],
-            [
-              { text: '✅ Я оплатил', callback_data: 'confirm_payment' }
             ],
             [
               { text: '❌ Отмена', callback_data: 'cancel_payment' }
@@ -757,46 +670,10 @@ bot.on('callback_query', async (query) => {
   }
 
   // --------------------------------------------------------------------------
-  // Payment Confirmation Handler (User clicked "I've Paid")
+  // Payment Confirmation Handler - NO LONGER NEEDED
+  // PayMe Merchant API webhooks handle payment confirmation automatically
   // --------------------------------------------------------------------------
-  if (data === 'confirm_payment') {
-    const lang = getUserLanguage(userId);
-    const session = userSessions.get(userId) || {};
-
-    await answerCallbackQuery(query.id);
-
-    if (!session.orderId) {
-      bot.sendMessage(chatId, '❌ <b>Ошибка</b>\n\nНе найдена информация о заказе. Пожалуйста, начните регистрацию заново.', {
-        parse_mode: 'HTML'
-      });
-      return;
-    }
-
-    // Ask for payment proof
-    const proofMessage = `
-📝 <b>Подтверждение оплаты</b>
-
-Пожалуйста, отправьте:
-
-1️⃣ ID транзакции PayMe
-   <b>ИЛИ</b>
-2️⃣ Скриншот платежа
-
-🆔 <b>Номер заказа:</b> <code>${session.orderId}</code>
-
-<i>После проверки администратором вы получите подтверждение регистрации.</i>
-    `.trim();
-
-    bot.sendMessage(chatId, proofMessage, {
-      parse_mode: 'HTML'
-    });
-
-    // Set session to await payment proof
-    session.awaitingPaymentProof = true;
-    userSessions.set(userId, session);
-
-    console.log(`⏳ Waiting for payment proof from user ${userId}`);
-  }
+  // Removed: Manual payment proof submission is replaced by automatic webhooks
 
   // --------------------------------------------------------------------------
   // Payment Cancellation Handler
@@ -1174,34 +1051,10 @@ bot.on('message', async (msg) => {
   }
 
   // --------------------------------------------------------------------------
-  // Payment Proof Submission Handler
+  // Payment Proof Submission Handler - REMOVED
   // --------------------------------------------------------------------------
-  const session = userSessions.get(userId) || {};
-
-  // Check if user is submitting payment proof (text or photo)
-  if (session.awaitingPaymentProof && (msg.text || msg.photo)) {
-    let proofText = '';
-
-    if (msg.text) {
-      proofText = msg.text;
-    } else if (msg.photo) {
-      // If photo submitted, use file_id as proof
-      proofText = `photo:${msg.photo[msg.photo.length - 1].file_id}`;
-    }
-
-    try {
-      // Process payment proof and register user
-      await processPaymentProof(chatId, userId, msg.from, lang, session, proofText);
-    } catch (error) {
-      console.error('Error processing payment proof:', error);
-      bot.sendMessage(
-        chatId,
-        '❌ <b>Ошибка при обработке платежа</b>\n\nПожалуйста, попробуйте позже или свяжитесь с поддержкой.',
-        { parse_mode: 'HTML' }
-      );
-    }
-    return;
-  }
+  // Manual payment proof submission is no longer needed. PayMe Merchant API
+  // webhooks automatically handle payment verification and confirmation.
 
   // --------------------------------------------------------------------------
   // Text Message Handler (Keyboard Buttons and Text Input)
@@ -1338,6 +1191,45 @@ bot.on('message', async (msg) => {
     }
   }
 });
+
+// ============================================================================
+// PAYME WEBHOOK SERVER
+// ============================================================================
+
+// Initialize PayMe Merchant API with bot and database
+if (PAYME_MERCHANT_ID && PAYME_SECRET_KEY) {
+  paymeMerchantAPI = new PayMeMerchantAPI(
+    {
+      merchantId: PAYME_MERCHANT_ID,
+      secretKey: PAYME_SECRET_KEY,
+      endpoint: PAYME_ENDPOINT
+    },
+    db,
+    bot,
+    ADMIN_USER_ID
+  );
+
+  // Create Express app for webhook
+  const app = express();
+  app.use(express.json());
+
+  // Health check endpoint
+  app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // PayMe webhook endpoint
+  app.post(WEBHOOK_PATH, paymeMerchantAPI.createWebhookHandler());
+
+  // Start webhook server
+  app.listen(WEBHOOK_PORT, () => {
+    console.log(`✅ PayMe webhook server started on port ${WEBHOOK_PORT}`);
+    console.log(`   Webhook endpoint: http://localhost:${WEBHOOK_PORT}${WEBHOOK_PATH}`);
+    console.log(`   Health check: http://localhost:${WEBHOOK_PORT}/health`);
+  });
+} else {
+  console.warn('⚠️  PayMe webhook server not started (credentials missing)');
+}
 
 // ============================================================================
 // ERROR HANDLING
